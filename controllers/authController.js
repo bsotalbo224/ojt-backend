@@ -649,18 +649,40 @@ exports.uploadAvatar = async (req, res) => {
       });
     }
 
-    const photoPath = "/uploads/profiles/" + req.file.filename;
+    const userId = req.user.user_id;
+
+    // OPTIONAL BUT IMPORTANT: delete old avatar
+    const [[existing]] = await db.query(
+      "SELECT photo FROM users WHERE user_id = ?",
+      [userId]
+    );
+
+    if (existing?.photo) {
+      try {
+        // Extract public_id from URL
+        const urlParts = existing.photo.split("/");
+        const fileName = urlParts[urlParts.length - 1];
+        const publicId = `ojt-system/profiles/${fileName.split(".")[0]}`;
+
+        await cloudinary.uploader.destroy(publicId);
+      } catch (err) {
+        console.warn("Cloudinary delete skipped:", err.message);
+      }
+    }
+
+    // Save Cloudinary URL
+    const photoUrl = req.file.path;
 
     await db.query(
-      "UPDATE users SET photo=? WHERE user_id=?",
-      [photoPath, req.user.user_id]
+      "UPDATE users SET photo = ? WHERE user_id = ?",
+      [photoUrl, userId]
     );
 
     const [rows] = await db.query(
       `SELECT user_id, f_name, l_name, email, photo
        FROM users
-       WHERE user_id=?`,
-      [req.user.user_id]
+       WHERE user_id = ?`,
+      [userId]
     );
 
     const u = rows[0];
@@ -669,9 +691,9 @@ exports.uploadAvatar = async (req, res) => {
       success: true,
       user: {
         user_id: u.user_id,
-        name: `${u.f_name} ${u.l_name}`,
+        name: `${u.f_name || ""} ${u.l_name || ""}`.trim(),
         email: u.email,
-        photo: u.photo,
+        photo: u.photo, // Cloudinary URL
         role: req.user.roles[0]
       }
     });
@@ -679,7 +701,8 @@ exports.uploadAvatar = async (req, res) => {
   } catch (err) {
     console.error("UPLOAD PROFILE ERROR:", err);
     res.status(500).json({
-      success: false
+      success: false,
+      message: "Upload failed"
     });
   }
 };

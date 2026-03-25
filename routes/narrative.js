@@ -6,7 +6,7 @@ const { requireAuth } = require("../middleware/authMiddleware");
 const { requireRole } = require("../middleware/roleMiddleware");
 const upload = require("../middleware/uploadMiddleware");
 
-// protect all routes
+// Protect all routes
 router.use(requireAuth);
 
 /* ===================================================
@@ -14,25 +14,20 @@ STUDENT: MY NARRATIVES
 =================================================== */
 router.get("/student/me", requireRole("student"), async (req, res) => {
   try {
-
     const studentId = req.user.student_id;
     const data = await NarrativeModel.getByStudent(studentId);
-
     res.json(data);
-
   } catch (err) {
     console.error("STUDENT NARRATIVE ERROR:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-
 /* ===================================================
 COORDINATOR: DEPARTMENT NARRATIVES
 =================================================== */
 router.get("/coordinator", requireRole("coordinator"), async (req, res) => {
   try {
-
     const coordId = req.user.coordinator_id;
 
     const [rows] = await db.query(
@@ -40,29 +35,23 @@ router.get("/coordinator", requireRole("coordinator"), async (req, res) => {
       [coordId]
     );
 
-    if (!rows.length) {
-      return res.json([]);
-    }
+    if (!rows.length) return res.json([]);
 
     const deptId = rows[0].department_id;
-
     const data = await NarrativeModel.getByDepartment(deptId);
 
     res.json(data);
-
   } catch (err) {
     console.error("COORD NARRATIVE ERROR:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-
 /* ===================================================
 ADMIN: ALL NARRATIVES
 =================================================== */
 router.get("/admin", requireRole("admin"), async (req, res) => {
   try {
-
     const [rows] = await db.query(`
       SELECT 
         n.*,
@@ -78,27 +67,21 @@ router.get("/admin", requireRole("admin"), async (req, res) => {
     `);
 
     res.json(rows);
-
   } catch (err) {
     console.error("ADMIN NARRATIVE ERROR:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-
 /* ===================================================
-STUDENT: CREATE OR UPDATE DAILY NARRATIVE
+STUDENT: CREATE / UPDATE NARRATIVE
 =================================================== */
 router.post(
   "/student",
   requireRole("student"),
   upload.array("attachments"),
   async (req, res) => {
-
-    console.log("BODY:", req.body);
-    console.log("FILES:", req.files);
     try {
-
       const studentId = req.user.student_id;
 
       const {
@@ -112,15 +95,30 @@ router.post(
         return res.status(400).json({ message: "Narrative date is required." });
       }
 
-      const hasContent = content && content.replace(/<[^>]*>/g, "").trim() !== "";
+      // Validate content or attachments
+      const hasContent =
+        content && content.replace(/<[^>]*>/g, "").trim() !== "";
       const hasAttachments = req.files && req.files.length > 0;
 
       if (!hasContent && !hasAttachments) {
         return res.status(400).json({
-          message: "Please provide a narrative or at least one attachment."
+          message: "Provide narrative content or at least one attachment."
         });
       }
 
+      // 🔐 Ownership check (important)
+      if (narrative_id) {
+        const [[existing]] = await db.query(
+          "SELECT student_id FROM narrative_reports WHERE narrative_id = ?",
+          [narrative_id]
+        );
+
+        if (!existing || existing.student_id !== studentId) {
+          return res.status(403).json({ message: "Unauthorized" });
+        }
+      }
+
+      // Create or update narrative
       const id = await NarrativeModel.create({
         narrative_id,
         student_id: studentId,
@@ -131,89 +129,110 @@ router.post(
 
       const files = req.files || [];
 
+      // Optional: clear old attachments on update
+      if (narrative_id && files.length > 0) {
+        await db.query(
+          "DELETE FROM attachments WHERE narrative_id = ?",
+          [narrative_id]
+        );
+      }
+
+      // Save attachments (Cloudinary URLs)
       for (const file of files) {
         await db.query(`
-    INSERT INTO attachments
-    (narrative_id, file_name, file_path, file_type)
-    VALUES (?, ?, ?, ?)
-  `, [
+          INSERT INTO attachments
+          (narrative_id, log_id, file_name, file_path, file_type)
+          VALUES (?, NULL, ?, ?, ?)
+        `, [
           id,
           file.originalname,
-          file.path,
+          file.path,     // ✅ Cloudinary URL
           file.mimetype
         ]);
       }
 
-      res.json({ narrative_id: id });
+      res.json({
+        success: true,
+        narrative_id: id,
+        attachments: files.map(file => ({
+          name: file.originalname,
+          url: file.path
+        }))
+      });
 
     } catch (err) {
       console.error("CREATE NARRATIVE ERROR:", err);
-      res.status(500).json({ message: "Server error" });
+      res.status(500).json({
+        message: err.message || "Server error"
+      });
     }
-  });
-
+  }
+);
 
 /* ===================================================
 GET NARRATIVE ATTACHMENTS
 =================================================== */
 router.get("/:id/attachments", async (req, res) => {
   try {
-
-    const narrativeId = req.params.id;
-
-    const files = await NarrativeModel.getAttachments(narrativeId);
-
+    const files = await NarrativeModel.getAttachments(req.params.id);
     res.json(files);
-
   } catch (err) {
-    console.error("GET NARRATIVE ATTACHMENTS ERROR:", err);
+    console.error("GET ATTACHMENTS ERROR:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
 
+/* ===================================================
+SECURE FILE ACCESS (Cloudinary redirect)
+=================================================== */
+router.get("/attachments/file/:id", async (req, res) => {
+  try {
+    const [[file]] = await db.query(
+      "SELECT * FROM attachments WHERE attachment_id = ?",
+      [req.params.id]
+    );
+
+    if (!file) {
+      return res.status(404).json({ message: "File not found" });
+    }
+
+    return res.redirect(file.file_path); // ✅ Cloudinary
+  } catch (err) {
+    console.error("FILE ACCESS ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
 
 /* ===================================================
-COORDINATOR: REVIEW NARRATIVE
+COORDINATOR: REVIEW
 =================================================== */
 router.put("/review/:id", requireRole("coordinator"), async (req, res) => {
   try {
-
-    const id = req.params.id;
     const { status, remarks } = req.body;
-
-    await NarrativeModel.updateStatus(id, status, remarks);
-
+    await NarrativeModel.updateStatus(req.params.id, status, remarks);
     res.json({ success: true });
-
   } catch (err) {
-    console.error("REVIEW NARRATIVE ERROR:", err);
+    console.error("REVIEW ERROR:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-
 /* ===================================================
 GET SINGLE NARRATIVE
-Used by NarrativeComposer when clicking notification
 =================================================== */
 router.get("/:id", async (req, res) => {
   try {
-
-    const narrativeId = req.params.id;
-
-    const narrative = await NarrativeModel.getById(narrativeId);
+    const narrative = await NarrativeModel.getById(req.params.id);
 
     if (!narrative) {
       return res.status(404).json({ message: "Narrative not found" });
     }
 
     res.json(narrative);
-
   } catch (err) {
-    console.error("GET SINGLE NARRATIVE ERROR:", err);
+    console.error("GET NARRATIVE ERROR:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
-
 
 module.exports = router;

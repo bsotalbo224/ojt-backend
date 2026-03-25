@@ -24,6 +24,7 @@ router.get("/attachments/:id", async (req, res) => {
       return res.status(404).json({ message: "File not found" });
     }
 
+    // Authorization
     if (user.role === "student" && user.student_id !== file.student_id) {
       return res.status(403).json({ message: "Forbidden" });
     }
@@ -32,14 +33,8 @@ router.get("/attachments/:id", async (req, res) => {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    const fs = require("fs");
-    const filePath = path.join(__dirname, "..", "uploads", file.file_path);
-
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ message: "File missing on server" });
-    }
-
-    res.sendFile(filePath);
+    // Cloudinary redirect
+    return res.redirect(file.file_path);
 
   } catch (err) {
     console.error("ATTACHMENT ACCESS ERROR:", err);
@@ -155,12 +150,13 @@ router.post(
           message: "No file uploaded"
         });
       }
+      const file = req.file;
 
       await LogModel.addAttachment({
         log_id: logId,
-        file_name: req.file.originalname,
-        file_path: `daily_logs/${req.file.filename}`,
-        file_type: req.file.mimetype
+        file_name: file.originalname,
+        file_path: file.path,
+        file_type: file.mimetype
       });
 
       res.json({

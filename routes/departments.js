@@ -4,26 +4,12 @@ const router = express.Router();
 const DepartmentModel = require("../models/DepartmentModel");
 const { requireAuth } = require("../middleware/authMiddleware");
 const { requireRole } = require("../middleware/roleMiddleware");
-const multer = require("multer");
-const path = require("path");
+const upload = require("../middleware/uploadMiddleware");
+const db = require("../config/db");
+const cloudinary = require("../config/cloudinary");
 
+// Protect all routes
 router.use(requireAuth);
-
-/* =========================
-MULTER CONFIG
-========================= */
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/departments/");
-  },
-  filename: (req, file, cb) => {
-    const uniqueName = Date.now() + path.extname(file.originalname);
-    cb(null, uniqueName);
-  },
-});
-
-const upload = multer({ storage });
-
 
 /* ===================================================
 ADMIN: ALL DEPARTMENTS
@@ -49,7 +35,6 @@ router.get("/theme-list", requireRole("admin"), async (req, res) => {
       success: true,
       departments: data
     });
-
   } catch (err) {
     console.error("GET THEME DEPARTMENTS ERROR:", err);
     res.status(500).json({ message: "Server error" });
@@ -97,7 +82,7 @@ router.post("/", requireRole("admin"), async (req, res) => {
 });
 
 /* ===================================================
-ADMIN: UPLOAD DEPARTMENT LOGO
+ADMIN: UPLOAD DEPARTMENT LOGO (CLOUDINARY)
 =================================================== */
 router.post(
   "/upload-logo",
@@ -114,13 +99,32 @@ router.post(
         });
       }
 
-      const logoPath = `/uploads/departments/${req.file.filename}`;
 
-      await DepartmentModel.updateLogo(department_id, logoPath);
+      const [[existing]] = await db.query(
+        "SELECT logo FROM departments WHERE department_id = ?",
+        [department_id]
+      );
+
+      if (existing?.logo && existing.logo.startsWith("http")) {
+        try {
+          const parts = existing.logo.split("/");
+          const fileName = parts[parts.length - 1];
+          const publicId = `ojt-system/departments/${fileName.split(".")[0]}`;
+
+          await cloudinary.uploader.destroy(publicId);
+        } catch (err) {
+          console.warn("Old logo deletion skipped:", err.message);
+        }
+      }
+
+
+      const logoUrl = req.file.path;
+
+      await DepartmentModel.updateLogo(department_id, logoUrl);
 
       res.json({
         success: true,
-        logo: logoPath,
+        logo: logoUrl,
       });
 
     } catch (err) {
@@ -131,7 +135,7 @@ router.post(
 );
 
 /* ===================================================
-ADMIN: UPDATE DEPARTMENT (GENERIC LAST)
+ADMIN: UPDATE DEPARTMENT
 =================================================== */
 router.put("/:id", requireRole("admin"), async (req, res) => {
   try {

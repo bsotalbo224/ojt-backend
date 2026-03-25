@@ -124,7 +124,6 @@ const reportRoutes = require("./routes/report");
 const progressRoutes = require("./routes/progress");
 
 const notificationRoutes = require("./routes/notifications");
-const uploadRoutes = require("./routes/upload");
 
 const messageRoutes = require("./routes/messageRoutes");
 
@@ -180,8 +179,6 @@ app.use(cookieParser());
 
 app.use("/api/auth", authRoutes);
 
-app.use("/uploads", express.static("uploads"));
-app.use("/api/upload", uploadRoutes);
 
 // Public evaluation (supervisor access)
 app.use("/api/public-evaluation", publicEvaluationRoutes);

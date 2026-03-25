@@ -1,0 +1,27 @@
+# dependencies
+node_modules/
+
+# environment variables
+.env
+
+# local uploads (old system)
+uploads/
+uploads_backup/
+
+# logs
+logs
+*.log
+
+# build folders
+dist/
+build/
+
+# Vite cache
+.vite/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# misc
+*.local

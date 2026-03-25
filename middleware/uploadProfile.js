@@ -1,21 +1,22 @@
 const multer = require("multer");
-const path = require("path");
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const cloudinary = require("../config/cloudinary");
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/profiles");
+
+const sanitize = (name) =>
+  name.replace(/\s+/g, "-").replace(/[^\w.-]/g, "");
+
+const storage = new CloudinaryStorage({
+  cloudinary,
+  params: async (req, file) => {
+    return {
+      folder: "ojt-system/profiles",
+      resource_type: "image", // strictly images
+      public_id: `profile-${req.user.user_id}-${Date.now()}-${sanitize(file.originalname)}`,
+    };
   },
-  filename: (req, file, cb) => {
-    const uniqueName =
-      "profile-" +
-      req.user.user_id +
-      "-" +
-      Date.now() +
-      path.extname(file.originalname);
-
-    cb(null, uniqueName);
-  }
 });
+
 
 const fileFilter = (req, file, cb) => {
   const allowedTypes = [
@@ -35,5 +36,7 @@ const fileFilter = (req, file, cb) => {
 module.exports = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB
+  },
 });
