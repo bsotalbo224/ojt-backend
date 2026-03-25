@@ -94,6 +94,9 @@ router.post(
   requireRole("student"),
   upload.array("attachments"),
   async (req, res) => {
+
+    console.log("BODY:", req.body);
+    console.log("FILES:", req.files);
     try {
 
       const studentId = req.user.student_id;
