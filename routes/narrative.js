@@ -4,6 +4,7 @@ const db = require("../config/db");
 const NarrativeModel = require("../models/NarrativeModel");
 const { requireAuth } = require("../middleware/authMiddleware");
 const { requireRole } = require("../middleware/roleMiddleware");
+const upload = require("../middleware/uploadMiddleware");
 
 // protect all routes
 router.use(requireAuth);
@@ -88,41 +89,65 @@ router.get("/admin", requireRole("admin"), async (req, res) => {
 /* ===================================================
 STUDENT: CREATE OR UPDATE DAILY NARRATIVE
 =================================================== */
-router.post("/student", requireRole("student"), async (req, res) => {
-  try {
+router.post(
+  "/student",
+  requireRole("student"),
+  upload.array("attachments"),
+  async (req, res) => {
+    try {
 
-    const studentId = req.user.student_id;
+      const studentId = req.user.student_id;
 
-    const {
-      narrative_id,
-      narrative_date,
-      content,
-      status
-    } = req.body;
+      const {
+        narrative_id,
+        narrative_date,
+        content,
+        status
+      } = req.body;
 
-    if (!narrative_date) {
-      return res.status(400).json({ message: "Narrative date is required." });
+      if (!narrative_date) {
+        return res.status(400).json({ message: "Narrative date is required." });
+      }
+
+      const hasContent = content && content.replace(/<[^>]*>/g, "").trim() !== "";
+      const hasAttachments = req.files && req.files.length > 0;
+
+      if (!hasContent && !hasAttachments) {
+        return res.status(400).json({
+          message: "Please provide a narrative or at least one attachment."
+        });
+      }
+
+      const id = await NarrativeModel.create({
+        narrative_id,
+        student_id: studentId,
+        narrative_date,
+        content,
+        status: status || "draft"
+      });
+
+      const files = req.files || [];
+
+      for (const file of files) {
+        await db.query(`
+    INSERT INTO attachments
+    (narrative_id, file_name, file_path, file_type)
+    VALUES (?, ?, ?, ?)
+  `, [
+          id,
+          file.originalname,
+          file.path,
+          file.mimetype
+        ]);
+      }
+
+      res.json({ narrative_id: id });
+
+    } catch (err) {
+      console.error("CREATE NARRATIVE ERROR:", err);
+      res.status(500).json({ message: "Server error" });
     }
-
-    if (!content) {
-      return res.status(400).json({ message: "Narrative content is required." });
-    }
-
-    const id = await NarrativeModel.create({
-      narrative_id,
-      student_id: studentId,
-      narrative_date,
-      content,
-      status: status || "draft"
-    });
-
-    res.json({ narrative_id: id });
-
-  } catch (err) {
-    console.error("CREATE NARRATIVE ERROR:", err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
+  });
 
 
 /* ===================================================
@@ -139,39 +164,6 @@ router.get("/:id/attachments", async (req, res) => {
 
   } catch (err) {
     console.error("GET NARRATIVE ATTACHMENTS ERROR:", err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-
-/* ===================================================
-UPLOAD NARRATIVE ATTACHMENTS
-=================================================== */
-router.post("/:id/attachments", requireRole("student"), async (req, res) => {
-  try {
-
-    const narrativeId = req.params.id;
-    const files = req.files || [];
-
-    for (const file of files) {
-
-      await db.query(`
-        INSERT INTO attachments
-        (narrative_id, file_name, file_path, file_type)
-        VALUES (?, ?, ?, ?)
-      `, [
-        narrativeId,
-        file.originalname,
-        file.path,
-        file.mimetype
-      ]);
-
-    }
-
-    res.json({ success: true });
-
-  } catch (err) {
-    console.error("UPLOAD NARRATIVE FILE ERROR:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
