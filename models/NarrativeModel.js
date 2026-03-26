@@ -55,28 +55,61 @@ class NarrativeModel {
   // =========================
   // COORDINATOR VIEW
   // =========================
-  static async getByDepartment(department_id) {
+// =========================
+// COORDINATOR VIEW
+// =========================
+static async getByDepartment(department_id) {
 
-    const [rows] = await db.query(`
-      SELECT 
-        n.*,
-        CONCAT(u.f_name,' ',u.l_name) AS student_name,
-        u.photo,
-        comp.company_name AS company,
-        cr.course_code AS course
-      FROM narrative_reports n
-      JOIN students s ON n.student_id = s.student_id
-      JOIN users u ON s.user_id = u.user_id
-      LEFT JOIN courses cr ON s.course_id = cr.course_id
-      LEFT JOIN companies comp ON s.company_id = comp.company_id
-      JOIN courses c ON s.course_id = c.course_id
-      WHERE c.department_id = ?
-      AND n.status IN ('submitted','revision','approved')
-      ORDER BY n.narrative_date DESC
-    `, [department_id]);
+  const [rows] = await db.query(`
+    SELECT 
+      n.*,
+      CONCAT(u.f_name,' ',u.l_name) AS student_name,
+      u.photo,
+      comp.company_name AS company,
+      cr.course_code AS course
+    FROM narrative_reports n
+    JOIN students s ON n.student_id = s.student_id
+    JOIN users u ON s.user_id = u.user_id
+    LEFT JOIN courses cr ON s.course_id = cr.course_id
+    LEFT JOIN companies comp ON s.company_id = comp.company_id
+    JOIN courses c ON s.course_id = c.course_id
+    WHERE c.department_id = ?
+    AND n.status IN ('submitted','revision','approved')
+    ORDER BY n.narrative_date DESC
+  `, [department_id]);
 
-    return rows;
+  // =========================
+  // ATTACHMENTS
+  // =========================
+
+  if (rows.length > 0) {
+
+    const narrativeIds = rows.map(n => n.narrative_id);
+
+    const [attachments] = await db.query(`
+      SELECT narrative_id, file_path
+      FROM attachments
+      WHERE narrative_id IN (?)
+    `, [narrativeIds]);
+
+    // Group attachments by narrative_id
+    const attachmentMap = {};
+    attachments.forEach(att => {
+      if (!attachmentMap[att.narrative_id]) {
+        attachmentMap[att.narrative_id] = [];
+      }
+      attachmentMap[att.narrative_id].push(att.file_path);
+    });
+
+    // Attach to each narrative
+    rows.forEach(narrative => {
+      narrative.attachments = attachmentMap[narrative.narrative_id] || [];
+    });
+
   }
+
+  return rows;
+}
 
 
   // =========================
