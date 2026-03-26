@@ -33,6 +33,8 @@ const verifyToken = (req, res, next) => {
 
     req.user = {
       user_id: payload.user_id,
+      role: Array.isArray(payload.roles) ? payload.roles[0] : null,
+
       roles: Array.isArray(payload.roles) ? payload.roles : [],
 
       student_id: payload.student_id || null,
