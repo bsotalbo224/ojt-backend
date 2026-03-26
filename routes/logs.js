@@ -139,29 +139,31 @@ STUDENT: UPLOAD ATTACHMENT
 router.post(
   "/:id/attachments",
   requireRole("student"),
-  upload.single("file"),
+  upload.array("files", 5),
   async (req, res) => {
     try {
       const logId = req.params.id;
+      const files = req.files;
 
-      if (!req.file) {
+      if (!files || files.length === 0) {
         return res.status(400).json({
           success: false,
-          message: "No file uploaded"
+          message: "No files uploaded"
         });
       }
-      const file = req.file;
 
-      await LogModel.addAttachment({
-        log_id: logId,
-        file_name: file.originalname,
-        file_path: file.path,
-        file_type: file.mimetype
-      });
+      for (const file of files) {
+        await LogModel.addAttachment({
+          log_id: logId,
+          file_name: file.originalname,
+          file_path: file.path,
+          file_type: file.mimetype
+        });
+      }
 
       res.json({
         success: true,
-        message: "Attachment uploaded"
+        message: "Attachments uploaded successfully"
       });
 
     } catch (err) {

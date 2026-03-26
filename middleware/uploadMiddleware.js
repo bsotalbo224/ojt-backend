@@ -41,7 +41,7 @@ const fileFilter = (req, file, cb) => {
   ];
 
   if (!allowed.includes(file.mimetype)) {
-    return cb(new Error("Invalid file type"), false);
+    return cb(null, false);
   }
 
   cb(null, true);
