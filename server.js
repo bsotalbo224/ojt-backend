@@ -107,6 +107,9 @@ module.exports.io = io;
 const authRoutes = require("./routes/auth");
 const usersRoutes = require("./routes/users");
 
+//upload
+const uploadRoutes = require("./routes/upload");
+
 // core modules
 const adminRoutes = require("./routes/admin");
 const coordinatorRoutes = require("./routes/coordinators");
@@ -178,6 +181,7 @@ app.use(cookieParser());
 //////////////////////////////////////////////////////
 
 app.use("/api/auth", authRoutes);
+app.use("/api/upload", uploadRoutes);
 
 
 // Public evaluation (supervisor access)
