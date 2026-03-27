@@ -25,11 +25,11 @@ router.get("/attachments/:id", async (req, res) => {
     }
 
     // Authorization
-    if (user.role === "student" && user.student_id !== file.student_id) {
+    if (user.roles === "student" && user.student_id !== file.student_id) {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    if (user.role === "coordinator" && user.department_id !== file.department_id) {
+    if (user.roles === "coordinator" && user.department_id !== file.department_id) {
       return res.status(403).json({ message: "Forbidden" });
     }
 
@@ -219,11 +219,11 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ message: "Log not found" });
     }
 
-    if (user.role === "student" && log.student_id !== user.student_id) {
+    if (user.roles === "student" && log.student_id !== user.student_id) {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    if (user.role === "coordinator" && user.department_id !== log.department_id) {
+    if (user.roles === "coordinator" && user.department_id !== log.department_id) {
       return res.status(403).json({ message: "Forbidden" });
     }
 
