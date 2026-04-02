@@ -1,6 +1,6 @@
 /**
  * roleMiddleware.js
- * Supports multi-role users using req.user.roles
+ * Single-role system (no more roles array)
  */
 
 const requireRole = (role) => {
@@ -10,9 +10,8 @@ const requireRole = (role) => {
       return res.status(401).json({ message: "Not authenticated" });
     }
 
-    const userRoles = req.user.roles || [];
 
-    if (!userRoles.includes(role)) {
+    if (req.user.role !== role && req.user.role !== "admin") {
       return res.status(403).json({
         message: "Forbidden (insufficient role)"
       });
@@ -29,11 +28,7 @@ const requireAnyRole = (roles = []) => {
       return res.status(401).json({ message: "Not authenticated" });
     }
 
-    const userRoles = req.user.roles || [];
-
-    const allowed = roles.some(role => userRoles.includes(role));
-
-    if (!allowed) {
+    if (!roles.includes(req.user.role)) {
       return res.status(403).json({
         message: "Forbidden (insufficient role)"
       });

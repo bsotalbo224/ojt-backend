@@ -1,16 +1,7 @@
-/**
- * authMiddleware.js
- * - Verifies JWT from Bearer token
- * - Sets req.user = decoded payload
- * - Supports multiple roles
- */
-
 const jwt = require("jsonwebtoken");
 
-// Verify JWT token
 const verifyToken = (req, res, next) => {
   try {
-
     const authHeader = req.headers.authorization || req.headers.Authorization;
 
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -33,13 +24,9 @@ const verifyToken = (req, res, next) => {
 
     req.user = {
       user_id: payload.user_id,
-      role: Array.isArray(payload.roles) ? payload.roles[0] : null,
-
-      roles: Array.isArray(payload.roles) ? payload.roles : [],
-
+      role: payload.role,
       student_id: payload.student_id || null,
-      coordinator_id: payload.coordinator_id || null,
-      department_id: payload.department_id || null
+      coordinator_id: payload.coordinator_id || null
     };
 
     next();
@@ -58,30 +45,19 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-// Alias for cleaner routes
 const requireAuth = verifyToken;
 
-
-/*
-=================================
- ROLE BASED ACCESS CONTROL
-=================================
-*/
 const requireRole = (...allowedRoles) => {
   return (req, res, next) => {
 
-    if (!req.user?.roles || req.user.roles.length === 0) {
+    if (!req.user?.role) {
       return res.status(403).json({
         success: false,
-        message: "Forbidden: no roles assigned"
+        message: "Forbidden: no role assigned"
       });
     }
 
-    const hasRole = req.user.roles.some(role =>
-      allowedRoles.includes(role)
-    );
-
-    if (!hasRole) {
+    if (!allowedRoles.includes(req.user.role)) {
       return res.status(403).json({
         success: false,
         message: "Forbidden: insufficient role"

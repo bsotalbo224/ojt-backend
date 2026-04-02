@@ -32,12 +32,12 @@ router.get("/", requireAuth, async (req, res) => {
   try {
     let students;
 
-    if (req.user.roles?.includes("admin")) {
+    if (req.user.role === "admin") {
       students = await StudentModel.getAll();
-    } 
-    else if (req.user.roles?.includes("coordinator")) {
+    }
+    else if (req.user.role === "coordinator") {
       students = await StudentModel.getByCoordinator(req.user.user_id);
-    } 
+    }
     else {
       return res.status(403).json({ message: "Forbidden" });
     }

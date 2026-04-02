@@ -81,93 +81,76 @@ const MessageModel = {
   GET CONVERSATION LIST
   =================================
   */
-  async getConversations(userId, roles = []) {
+async getConversations(userId, role) {
 
-    /*
-    =================================
-    STUDENT → SHOW COORDINATOR/ADMIN
-    =================================
-    */
-    if (roles.includes("student")) {
+  if (role === "student") {
 
-      const [rows] = await db.execute(`
-        SELECT
-          u.user_id,
-          u.f_name,
-          u.l_name,
-          u.photo,
-          'coordinator' AS role,
+    const [rows] = await db.execute(`
+      SELECT
+        u.user_id,
+        u.f_name,
+        u.l_name,
+        u.photo,
+        'coordinator' AS role,
 
-          MAX(m.created_at) AS last_message_time,
+        MAX(m.created_at) AS last_message_time,
 
-          SUBSTRING_INDEX(
-            GROUP_CONCAT(m.message ORDER BY m.created_at DESC),
-            ',', 1
-          ) AS last_message
+        MAX(m.message) AS last_message
 
-        FROM students s
-        JOIN coordinators c
-          ON c.department_id = s.department_id
-        JOIN users u
-          ON u.user_id = c.user_id
-        LEFT JOIN messages m
-          ON (
-            (m.sender_id = u.user_id AND m.receiver_id = ?)
-            OR
-            (m.sender_id = ? AND m.receiver_id = u.user_id)
-          )
-        WHERE s.user_id = ?
-        GROUP BY u.user_id
-        ORDER BY last_message_time DESC, u.f_name ASC
-      `, [userId, userId, userId]);
+      FROM students s
+      JOIN coordinators c
+        ON c.department_id = s.department_id
+      JOIN users u
+        ON u.user_id = c.user_id
+      LEFT JOIN messages m
+        ON (
+          (m.sender_id = u.user_id AND m.receiver_id = ?)
+          OR
+          (m.sender_id = ? AND m.receiver_id = u.user_id)
+        )
+      WHERE s.user_id = ?
+      GROUP BY u.user_id
+      ORDER BY last_message_time DESC, u.f_name ASC
+    `, [userId, userId, userId]);
 
-      return rows;
-    }
-
-
-    /*
-    =================================
-    COORDINATOR / ADMIN → SHOW STUDENTS
-    =================================
-    */
-    if (roles.includes("coordinator") || roles.includes("admin")) {
-
-      const [rows] = await db.execute(`
-        SELECT
-          u.user_id,
-          u.f_name,
-          u.l_name,
-          u.photo,
-          'student' AS role,
-
-          MAX(m.created_at) AS last_message_time,
-
-          SUBSTRING_INDEX(
-            GROUP_CONCAT(m.message ORDER BY m.created_at DESC),
-            ',', 1
-          ) AS last_message
-
-        FROM coordinators c
-        JOIN students s
-          ON s.department_id = c.department_id
-        JOIN users u
-          ON u.user_id = s.user_id
-        LEFT JOIN messages m
-          ON (
-            (m.sender_id = u.user_id AND m.receiver_id = ?)
-            OR
-            (m.sender_id = ? AND m.receiver_id = u.user_id)
-          )
-        WHERE c.user_id = ?
-        GROUP BY u.user_id
-        ORDER BY last_message_time DESC, u.f_name ASC
-      `, [userId, userId, userId]);
-
-      return rows;
-    }
-
-    return [];
+    return rows;
   }
+
+  if (role === "coordinator" || role === "admin") {
+
+    const [rows] = await db.execute(`
+      SELECT
+        u.user_id,
+        u.f_name,
+        u.l_name,
+        u.photo,
+        'student' AS role,
+
+        MAX(m.created_at) AS last_message_time,
+
+        MAX(m.message) AS last_message
+
+      FROM coordinators c
+      JOIN students s
+        ON s.department_id = c.department_id
+      JOIN users u
+        ON u.user_id = s.user_id
+      LEFT JOIN messages m
+        ON (
+          (m.sender_id = u.user_id AND m.receiver_id = ?)
+          OR
+          (m.sender_id = ? AND m.receiver_id = u.user_id)
+        )
+      WHERE c.user_id = ?
+      GROUP BY u.user_id
+      ORDER BY last_message_time DESC, u.f_name ASC
+    `, [userId, userId, userId]);
+
+    return rows;
+  }
+
+  return [];
+}
 
 };
 
