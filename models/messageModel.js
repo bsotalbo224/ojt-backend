@@ -93,9 +93,9 @@ async getConversations(userId, role) {
         u.photo,
         'coordinator' AS role,
 
-        MAX(m.created_at) AS last_message_time,
+        COALESCE(MAX(m.created_at), NOW()) AS last_message_time,
 
-        MAX(m.message) AS last_message
+        COALESCE(MAX(m.message), '') AS last_message
 
       FROM students s
       JOIN coordinators c
@@ -126,9 +126,9 @@ async getConversations(userId, role) {
         u.photo,
         'student' AS role,
 
-        MAX(m.created_at) AS last_message_time,
+        COALESCE(MAX(m.created_at), NOW()) AS last_message_time,
 
-        MAX(m.message) AS last_message
+        COALESCE(MAX(m.message), '') AS last_message
 
       FROM coordinators c
       JOIN students s
