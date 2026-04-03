@@ -26,7 +26,8 @@ const verifyToken = (req, res, next) => {
       user_id: payload.user_id,
       role: payload.role,
       student_id: payload.student_id || null,
-      coordinator_id: payload.coordinator_id || null
+      coordinator_id: payload.coordinator_id || null,
+      department_id: payload.department_id || null
     };
 
     next();

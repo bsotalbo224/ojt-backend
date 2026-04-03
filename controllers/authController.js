@@ -180,7 +180,8 @@ const token = jwt.sign(
     user_id: user.user_id,
     role,
     student_id,
-    coordinator_id
+    coordinator_id,
+    department_id
   },
   process.env.JWT_SECRET,
   { expiresIn: "8h" }
