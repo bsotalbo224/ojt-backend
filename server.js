@@ -174,6 +174,13 @@ app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
 
+// =========================
+// HEALTH CHECK (KEEP RENDER AWAKE)
+// =========================
+app.get('/api/health', (req, res) => {
+  res.send('OK');
+});
+
 //////////////////////////////////////////////////////
 // =========================
 // PUBLIC ROUTES
