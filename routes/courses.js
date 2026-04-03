@@ -7,7 +7,7 @@ const { requireAuth } = require("../middleware/authMiddleware");
 const { requireRole } = require("../middleware/roleMiddleware");
 
 router.use(requireAuth);
-router.use(requireRole("admin"));
+router.use(requireRole("admin", "coordinator"));
 
 /* =====================================================
 COURSE CODE GENERATOR
