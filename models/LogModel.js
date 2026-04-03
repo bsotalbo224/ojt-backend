@@ -230,41 +230,51 @@ class LogModel {
   // =========================
   // SINGLE LOG WITH ATTACHMENTS
   // =========================
-  static async getById(log_id) {
+static async getById(log_id) {
+  const [[log]] = await db.query(`
+    SELECT 
+      l.*,
+      l.feedback AS coordinator_feedback,
+      s.student_id,
+      c.department_id,
+      c.course_code,
+      d.department_name,
+      comp.company_name,
 
-    const [[log]] = await db.query(`
-      SELECT 
-        l.*,
-        l.feedback AS coordinator_feedback,
-        s.student_id,
-        c.department_id,
-        CONCAT(u.f_name,' ',u.l_name) AS student_name,
-        c.course_code
-      FROM daily_logs l
-      JOIN students s ON l.student_id = s.student_id
-      JOIN users u ON s.user_id = u.user_id
-      JOIN courses c ON s.course_id = c.course_id
-      WHERE l.log_id = ?
-    `, [log_id]);
+      a.time_in,
+      a.time_out,
+      TIMESTAMPDIFF(HOUR, a.time_in, a.time_out) AS total_hours,
 
-    if (!log) return null;
+      u.f_name,
+      u.l_name,
+      CONCAT(u.f_name,' ',u.l_name) AS student_name
 
-    const [attachments] = await db.query(`
-      SELECT 
-        attachment_id,
-        file_name,
-        file_path,
-        file_type,
-        uploaded_at
-      FROM attachments
-      WHERE log_id = ?
-      ORDER BY uploaded_at ASC
-    `, [log_id]);
+    FROM daily_logs l
+    JOIN students s ON l.student_id = s.student_id
+    JOIN users u ON s.user_id = u.user_id
+    JOIN courses c ON s.course_id = c.course_id
+    LEFT JOIN departments d ON c.department_id = d.department_id
+    LEFT JOIN companies comp ON s.company_id = comp.company_id
 
-    log.attachments = attachments;
+    LEFT JOIN attendance a
+      ON l.student_id = a.student_id
+      AND l.log_date = a.attendance_date
 
-    return log;
-  }
+    WHERE l.log_id = ?
+  `, [log_id]);
+
+  if (!log) return null;
+
+  const [attachments] = await db.query(`
+    SELECT attachment_id, file_name, file_path, file_type, uploaded_at
+    FROM attachments
+    WHERE log_id = ?
+  `, [log_id]);
+
+  log.attachments = attachments;
+
+  return log;
+}
 
   // =========================
   // UPDATE LOG (student revision)
