@@ -223,11 +223,11 @@ exports.getConversations = async (req, res) => {
   try {
 
     const userId = req.user.user_id;
-    const roles = req.user.roles || [];
+    const roles = req.user.role || [];
 
     const conversations = await MessageModel.getConversations(
       userId,
-      roles
+      role
     );
 
     res.json({
