@@ -27,7 +27,7 @@ router.get("/summary", requireAuth, async (req, res) => {
 });
 
 /* CREATE */
-router.post("/", requireAuth, requireRole("admin"), async (req, res) => {
+router.post("/", requireAuth, requireRole("admin", "coordinator"), async (req, res) => {
   try {
     const data = await CompanyModel.createCompany(req.body);
     res.json(data);
@@ -38,7 +38,7 @@ router.post("/", requireAuth, requireRole("admin"), async (req, res) => {
 });
 
 /* UPDATE */
-router.put("/:id", requireAuth, requireRole("admin"), async (req, res) => {
+router.put("/:id", requireAuth, requireRole("admin", "coordinator"), async (req, res) => {
   try {
     const data = await CompanyModel.updateCompany(req.params.id, req.body);
     res.json(data);
@@ -49,7 +49,7 @@ router.put("/:id", requireAuth, requireRole("admin"), async (req, res) => {
 });
 
 /* STATUS */
-router.patch("/:id/status", requireAuth, requireRole("admin"), async (req, res) => {
+router.patch("/:id/status", requireAuth, requireRole("admin", "coordinator"), async (req, res) => {
   try {
     const data = await CompanyModel.toggleCompanyStatus(
       req.params.id,
@@ -63,7 +63,7 @@ router.patch("/:id/status", requireAuth, requireRole("admin"), async (req, res) 
 });
 
 /* DELETE */
-router.delete("/:id", requireAuth, requireRole("admin"), async (req, res) => {
+router.delete("/:id", requireAuth, requireRole("admin", "coordinator"), async (req, res) => {
   try {
     const data = await CompanyModel.deleteCompany(req.params.id);
     res.json(data);
