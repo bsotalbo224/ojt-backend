@@ -6,38 +6,34 @@ GET ALL COMPANIES
 async function getAllCompanies() {
   const [rows] = await db.query(`
   SELECT 
-    c.company_id,
-    c.company_name,
-    c.address,
-    c.contact_person,
-    c.contact_email,
-    c.is_active,
-    l.latitude,
-    l.longitude,
-    l.radius_meters,
-    COUNT(DISTINCT l.location_id) AS total_locations,
-    COUNT(DISTINCT s.student_id) AS total_students
-  FROM companies c
-  LEFT JOIN ojt_locations l 
-ON l.company_id = c.company_id
-AND l.location_id = (
-  SELECT location_id
-  FROM ojt_locations
-  WHERE company_id = c.company_id
-  LIMIT 1
-)
-  LEFT JOIN students s ON s.company_id = c.company_id
-  GROUP BY 
-    c.company_id,
-    c.company_name,
-    c.address,
-    c.contact_person,
-    c.contact_email,
-    c.is_active,
-    l.latitude,
-    l.longitude,
-    l.radius_meters
-  ORDER BY c.company_name ASC
+  c.company_id,
+  c.company_name,
+  c.address,
+  c.is_active,
+  l.latitude,
+  l.longitude,
+  l.radius_meters,
+  COUNT(DISTINCT l.location_id) AS total_locations,
+  COUNT(DISTINCT s.student_id) AS total_students
+FROM companies c
+LEFT JOIN ojt_locations l 
+  ON l.company_id = c.company_id
+  AND l.location_id = (
+    SELECT location_id
+    FROM ojt_locations
+    WHERE company_id = c.company_id
+    LIMIT 1
+  )
+LEFT JOIN students s ON s.company_id = c.company_id
+GROUP BY 
+  c.company_id,
+  c.company_name,
+  c.address,
+  c.is_active,
+  l.latitude,
+  l.longitude,
+  l.radius_meters
+ORDER BY c.company_name ASC
 `);
 
   return rows;
@@ -76,8 +72,6 @@ async function createCompany(data) {
     const {
       company_name,
       address,
-      contact_person,
-      contact_email,
       latitude,
       longitude,
       location_name,
@@ -88,9 +82,9 @@ async function createCompany(data) {
 
     const [result] = await conn.query(
       `INSERT INTO companies 
-       (company_name, address, contact_person, contact_email)
-       VALUES (?, ?, ?, ?)`,
-      [company_name, address, contact_person, contact_email]
+       (company_name, address)
+       VALUES (?, ?)`,
+      [company_name, address]
     );
 
     const company_id = result.insertId;
@@ -116,8 +110,6 @@ async function createCompany(data) {
       company_id,
       company_name,
       address,
-      contact_person,
-      contact_email,
       is_active: 1
     };
 
@@ -140,8 +132,6 @@ async function updateCompany(id, data) {
     const {
       company_name,
       address,
-      contact_person,
-      contact_email,
       latitude,
       longitude,
       location_name,
@@ -153,9 +143,9 @@ async function updateCompany(id, data) {
     /* Update company info */
     await conn.query(
       `UPDATE companies 
-       SET company_name=?, address=?, contact_person=?, contact_email=?
+       SET company_name=?, address=?
        WHERE company_id=?`,
-      [company_name, address, contact_person, contact_email, id]
+      [company_name, address, id]
     );
 
     /* If location provided */
