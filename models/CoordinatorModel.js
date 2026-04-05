@@ -350,35 +350,52 @@ class CoordinatorModel {
   // =========================
   // ASSIGN COMPANY (coordinator)
   // =========================
-  static async assignCompany(studentId, companyId) {
+static async assignCompany(studentId, companyId) {
 
-    await db.query(
-      `UPDATE students
+  // Check if company exists and is ACTIVE
+  const [[company]] = await db.query(
+    `SELECT company_id, is_active 
+     FROM companies 
+     WHERE company_id = ?`,
+    [companyId]
+  );
+
+  if (!company) {
+    throw new Error("Company not found");
+  }
+
+  if (company.is_active !== 1) {
+    throw new Error("Cannot assign inactive company");
+  }
+
+  // Assign company
+  await db.query(
+    `UPDATE students
      SET company_id = ?
      WHERE student_id = ?`,
-      [companyId, studentId]
-    );
+    [companyId, studentId]
+  );
 
-    // notify student of placement
-    const [[row]] = await db.query(`
+  // Notify student
+  const [[row]] = await db.query(`
     SELECT s.user_id, comp.company_name
     FROM students s
     LEFT JOIN companies comp ON comp.company_id = s.company_id
     WHERE s.student_id = ?
   `, [studentId]);
 
-    if (row?.user_id) {
-      await sendNotification({
-        user_id: row.user_id,
-        title: "OJT Placement Assigned",
-        message: `You have been assigned to ${row.company_name}.`,
-        type: "placement",
-        link: "/student/dashboard"
-      });
-    }
-
-    return true;
+  if (row?.user_id) {
+    await sendNotification({
+      user_id: row.user_id,
+      title: "OJT Placement Assigned",
+      message: `You have been assigned to ${row.company_name}.`,
+      type: "placement",
+      link: "/student/dashboard"
+    });
   }
+
+  return true;
+}
 }
 
 module.exports = CoordinatorModel;
