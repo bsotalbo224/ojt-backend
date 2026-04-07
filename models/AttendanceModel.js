@@ -2,10 +2,16 @@ const db = require("../config/db");
 const { sendNotification } = require("../services/notificationServices");
 
 function getPHTime() {
-  return new Date().toLocaleTimeString("en-GB", {
-    hour12: false,
-    timeZone: "Asia/Manila"
-  });
+  const now = new Date();
+
+  // Add 8 hours manually
+  now.setHours(now.getHours() + 8);
+
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  const seconds = String(now.getSeconds()).padStart(2, "0");
+
+  return `${hours}:${minutes}:${seconds}`;
 }
 
 class AttendanceModel {
