@@ -1,6 +1,13 @@
 const db = require("../config/db");
 const { sendNotification } = require("../services/notificationServices");
 
+function getPHTime() {
+  return new Date().toLocaleTimeString("en-GB", {
+    hour12: false,
+    timeZone: "Asia/Manila"
+  });
+}
+
 class AttendanceModel {
 
   // =========================
@@ -29,7 +36,6 @@ class AttendanceModel {
   // =========================
   static async getByDepartment(department_id) {
 
-
     let sql = `
       SELECT
         a.attendance_id,
@@ -56,7 +62,6 @@ class AttendanceModel {
     }
 
     return (await db.query(sql))[0];
-
   }
 
   // =========================
@@ -122,11 +127,13 @@ class AttendanceModel {
       }
     }
 
+    const now = getPHTime();
+
     const [result] = await db.query(`
       INSERT INTO attendance
       (student_id, attendance_date, time_in, latitude, longitude, location_status)
-      VALUES (?, CURDATE(), NOW(), ?, ?, ?)
-    `, [student_id, latitude ?? null, longitude ?? null, location_status]);
+      VALUES (?, CURDATE(), ?, ?, ?, ?)
+    `, [student_id, now, latitude ?? null, longitude ?? null, location_status]);
 
     return result.insertId;
   }
@@ -136,13 +143,15 @@ class AttendanceModel {
   // =========================
   static async timeOutByStudent(student_id) {
 
+    const now = getPHTime();
+
     await db.query(`
       UPDATE attendance
-      SET time_out = NOW()
+      SET time_out = ?
       WHERE student_id = ?
         AND attendance_date = CURDATE()
         AND time_out IS NULL
-    `, [student_id]);
+    `, [now, student_id]);
 
     await this.checkCompletionAndNotify(student_id);
   }
@@ -169,7 +178,6 @@ class AttendanceModel {
     `, [student_id]);
 
     if (!row) return;
-
     if (row.completed_hours < row.required_hours) return;
 
     const [[existing]] = await db.query(`
