@@ -134,6 +134,8 @@ class AttendanceModel {
     }
 
     const now = getPHTime();
+    console.log("SERVER TIME RAW:", new Date().toString());
+    console.log("PH TIME:", getPHTime());
 
     const [result] = await db.query(`
       INSERT INTO attendance
