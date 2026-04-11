@@ -72,18 +72,31 @@ exports.listCoordinatorTemplates = async (req, res) => {
 ===================================================== */
 exports.toggleActiveTemplate = async (req, res) => {
   const { id } = req.params;
-  const { is_active } = req.body;
 
   try {
+    // get current value
+    const [[row]] = await db.query(
+      `SELECT is_active FROM evaluation_templates WHERE id = ?`,
+      [id]
+    );
+
+    if (!row) {
+      return res.status(404).json({ error: "Template not found" });
+    }
+
+    const newStatus = row.is_active ? 0 : 1;
+
     await db.query(
       `UPDATE evaluation_templates
        SET is_active = ?
        WHERE id = ?`,
-      [is_active ? 1 : 0, id]
+      [newStatus, id]
     );
 
-    res.json({ success: true });
+    res.json({ success: true, is_active: newStatus });
+
   } catch (err) {
+    console.error("TOGGLE ACTIVE ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 };
