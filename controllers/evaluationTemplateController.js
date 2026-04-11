@@ -265,15 +265,55 @@ exports.updateTemplate = async (req, res) => {
 exports.deleteTemplate = async (req, res) => {
   const { id } = req.params;
 
+  const conn = await db.getConnection();
+  await conn.beginTransaction();
+
   try {
-    await db.query(
-      `DELETE FROM evaluation_templates WHERE id=?`,
+    // 1. Delete answers (NEW — IMPORTANT)
+    await conn.query(`
+      DELETE ea FROM evaluation_answers ea
+      JOIN evaluation_criteria ec ON ea.criterion_id = ec.id
+      JOIN evaluation_sections es ON ec.section_id = es.id
+      WHERE es.template_id = ?
+    `, [id]);
+
+    // 2. Delete options
+    await conn.query(`
+      DELETE eo FROM evaluation_options eo
+      JOIN evaluation_criteria ec ON eo.criterion_id = ec.id
+      JOIN evaluation_sections es ON ec.section_id = es.id
+      WHERE es.template_id = ?
+    `, [id]);
+
+    // 3. Delete criteria
+    await conn.query(`
+      DELETE ec FROM evaluation_criteria ec
+      JOIN evaluation_sections es ON ec.section_id = es.id
+      WHERE es.template_id = ?
+    `, [id]);
+
+    // 4. Delete sections
+    await conn.query(
+      `DELETE FROM evaluation_sections WHERE template_id = ?`,
       [id]
     );
 
+    // 5. Delete template
+    await conn.query(
+      `DELETE FROM evaluation_templates WHERE id = ?`,
+      [id]
+    );
+
+    await conn.commit();
+
     res.json({ success: true });
+
   } catch (err) {
+    await conn.rollback();
+    console.error("DELETE TEMPLATE ERROR:", err);
     res.status(500).json({ error: err.message });
+  } finally {
+    conn.release();
   }
 };
 
