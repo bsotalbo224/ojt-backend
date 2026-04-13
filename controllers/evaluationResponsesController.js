@@ -8,8 +8,9 @@ const db = require("../config/db");
 exports.getResponses = async (req, res) => {
   try {
     const coordinatorId = req.user.coordinator_id;
+    const { templateId } = req.query;
 
-    // 🔥 Get coordinator department
+    // Get coordinator department
     const [[coord]] = await db.query(
       `SELECT department_id FROM coordinators WHERE coordinator_id = ?`,
       [coordinatorId]
@@ -21,21 +22,32 @@ exports.getResponses = async (req, res) => {
 
     const departmentId = coord.department_id;
 
-    // 🔥 Filter responses by department via template → course
-    const [rows] = await db.query(`
+    let query = `
       SELECT
         r.id,
         r.student_name,
         r.supervisor_name,
         r.supervisor_email,
         r.submitted_at,
-        t.name AS template_name
+        t.name AS template_name,
+        r.template_id
       FROM evaluation_responses r
       JOIN evaluation_templates t ON t.id = r.template_id
       JOIN courses c ON t.course_id = c.course_id
       WHERE c.department_id = ?
-      ORDER BY r.submitted_at DESC
-    `, [departmentId]);
+    `;
+
+    const values = [departmentId];
+
+    // FILTER BY TEMPLATE
+    if (templateId) {
+      query += ` AND r.template_id = ?`;
+      values.push(templateId);
+    }
+
+    query += ` ORDER BY r.submitted_at DESC`;
+
+    const [rows] = await db.query(query, values);
 
     res.json(rows);
 
@@ -56,7 +68,7 @@ exports.getResponseDetails = async (req, res) => {
   try {
     const coordinatorId = req.user.coordinator_id;
 
-    // 🔥 Get coordinator department
+    // Get coordinator department
     const [[coord]] = await db.query(
       `SELECT department_id FROM coordinators WHERE coordinator_id = ?`,
       [coordinatorId]
@@ -68,7 +80,7 @@ exports.getResponseDetails = async (req, res) => {
 
     const departmentId = coord.department_id;
 
-    // 🔥 Get response WITH department check
+    // Get response WITH department check
     const [[response]] = await db.query(
       `SELECT
         r.*,
@@ -85,7 +97,7 @@ exports.getResponseDetails = async (req, res) => {
       return res.status(404).json({ error: "Response not found" });
     }
 
-    // 🔒 SECURITY CHECK
+    // SECURITY CHECK
     if (response.department_id !== departmentId) {
       return res.status(403).json({ error: "Unauthorized access" });
     }
@@ -125,3 +137,42 @@ exports.getResponseDetails = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };  
+
+/* =========================
+   GET RESPONSE COUNTS PER TEMPLATE
+========================= */
+exports.getResponseCounts = async (req, res) => {
+  try {
+    const coordinatorId = req.user.coordinator_id;
+
+    // Get coordinator department
+    const [[coord]] = await db.query(
+      `SELECT department_id FROM coordinators WHERE coordinator_id = ?`,
+      [coordinatorId]
+    );
+
+    if (!coord) {
+      return res.status(403).json({ error: "Coordinator not found" });
+    }
+
+    const departmentId = coord.department_id;
+
+    // Count responses per template (filtered by department)
+    const [rows] = await db.query(`
+      SELECT 
+        r.template_id,
+        COUNT(*) AS count
+      FROM evaluation_responses r
+      JOIN evaluation_templates t ON t.id = r.template_id
+      JOIN courses c ON t.course_id = c.course_id
+      WHERE c.department_id = ?
+      GROUP BY r.template_id
+    `, [departmentId]);
+
+    res.json(rows);
+
+  } catch (err) {
+    console.error("Get response counts error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};

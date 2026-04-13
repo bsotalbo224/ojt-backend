@@ -3,6 +3,8 @@ const router = express.Router();
 
 const ctrl = require("../controllers/evaluationResponsesController");
 
+router.get("/responses/counts", ctrl.getResponseCounts);
+
 /* =========================
    LIST ALL RESPONSES
    GET /api/evaluations/responses
