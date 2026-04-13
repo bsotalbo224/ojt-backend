@@ -13,6 +13,8 @@ exports.listAdminTemplates = async (req, res) => {
         t.academic_year AS academicYear,
         t.is_active AS isActive,
         t.status,
+        t.link,
+        t.is_accepting_responses AS isAcceptingResponses,
         t.created_at AS createdAt,
 
         (
@@ -42,7 +44,6 @@ exports.listAdminTemplates = async (req, res) => {
 
 /* =====================================================
    LIST COORDINATOR TEMPLATES
-   (ONLY VISIBLE ONES)
 ===================================================== */
 exports.listCoordinatorTemplates = async (req, res) => {
   try {
@@ -53,7 +54,9 @@ exports.listCoordinatorTemplates = async (req, res) => {
         c.course_code AS courseCode,
         t.academic_year AS academicYear,
         t.is_active AS isActive,
-        t.status
+        t.status,
+        t.link,
+        t.is_accepting_responses AS isAcceptingResponses
       FROM evaluation_templates t
       LEFT JOIN courses c ON c.course_id = t.course_id
       WHERE t.status = 'published'
@@ -68,13 +71,12 @@ exports.listCoordinatorTemplates = async (req, res) => {
 };
 
 /* =====================================================
-   TOGGLE ACTIVE
+   TOGGLE ACTIVE (ADMIN ONLY)
 ===================================================== */
 exports.toggleActiveTemplate = async (req, res) => {
   const { id } = req.params;
 
   try {
-    // get current value
     const [[row]] = await db.query(
       `SELECT is_active FROM evaluation_templates WHERE id = ?`,
       [id]
@@ -87,9 +89,7 @@ exports.toggleActiveTemplate = async (req, res) => {
     const newStatus = row.is_active ? 0 : 1;
 
     await db.query(
-      `UPDATE evaluation_templates
-       SET is_active = ?
-       WHERE id = ?`,
+      `UPDATE evaluation_templates SET is_active = ? WHERE id = ?`,
       [newStatus, id]
     );
 
@@ -122,24 +122,24 @@ exports.createTemplate = async (req, res) => {
   await conn.beginTransaction();
 
   try {
-    const [tpl] = await conn.query(
-      `INSERT INTO evaluation_templates (
+    const [tpl] = await conn.query(`
+      INSERT INTO evaluation_templates (
         name, description, course_id, academic_year,
         is_active, rating_scale, rating_min_label, rating_max_label,
-        status
-      ) VALUES (?,?,?,?,?,?,?,?,?)`,
-      [
-        name,
-        description,
-        courseId,
-        academicYear,
-        0, // always start inactive
-        ratingSettings.scale,
-        ratingSettings.minLabel,
-        ratingSettings.maxLabel,
-        "draft"
-      ]
-    );
+        status, is_accepting_responses
+      ) VALUES (?,?,?,?,?,?,?,?,?,?)
+    `, [
+      name,
+      description,
+      courseId,
+      academicYear,
+      0,
+      ratingSettings.scale,
+      ratingSettings.minLabel,
+      ratingSettings.maxLabel,
+      "draft",
+      1
+    ]);
 
     const templateId = tpl.insertId;
 
@@ -183,6 +183,8 @@ exports.getTemplate = async (req, res) => {
       academicYear: tpl.academic_year,
       active: !!tpl.is_active,
       status: tpl.status,
+      link: tpl.link,
+      isAcceptingResponses: !!tpl.is_accepting_responses,
       ratingSettings: {
         scale: tpl.rating_scale,
         minLabel: tpl.rating_min_label,
@@ -197,7 +199,7 @@ exports.getTemplate = async (req, res) => {
 };
 
 /* =====================================================
-   UPDATE TEMPLATE
+   UPDATE TEMPLATE (FIXED)
 ===================================================== */
 exports.updateTemplate = async (req, res) => {
   const { id } = req.params;
@@ -215,23 +217,28 @@ exports.updateTemplate = async (req, res) => {
   await conn.beginTransaction();
 
   try {
-    await conn.query(
-      `UPDATE evaluation_templates
-       SET name=?, description=?, course_id=?, academic_year=?,
-           is_active=?, rating_scale=?, rating_min_label=?, rating_max_label=?
-       WHERE id=?`,
-      [
-        name,
-        description,
-        courseId,
-        academicYear,
-        active ? 1 : 0,
-        ratingSettings.scale,
-        ratingSettings.minLabel,
-        ratingSettings.maxLabel,
-        id
-      ]
-    );
+    const safeRating = ratingSettings || {
+      scale: "1-5",
+      minLabel: "Poor",
+      maxLabel: "Excellent"
+    };
+
+    await conn.query(`
+      UPDATE evaluation_templates
+      SET name=?, description=?, course_id=?, academic_year=?,
+          is_active=?, rating_scale=?, rating_min_label=?, rating_max_label=?
+      WHERE id=?
+    `, [
+      name,
+      description,
+      courseId,
+      academicYear,
+      active ? 1 : 0,
+      safeRating.scale,
+      safeRating.minLabel,
+      safeRating.maxLabel,
+      id
+    ]);
 
     await conn.query(`
       DELETE FROM evaluation_criteria
@@ -253,6 +260,7 @@ exports.updateTemplate = async (req, res) => {
 
   } catch (err) {
     await conn.rollback();
+    console.error("UPDATE ERROR:", err);
     res.status(500).json({ error: err.message });
   } finally {
     conn.release();
@@ -260,81 +268,26 @@ exports.updateTemplate = async (req, res) => {
 };
 
 /* =====================================================
-   DELETE TEMPLATE
-===================================================== */
-exports.deleteTemplate = async (req, res) => {
-  const { id } = req.params;
-
-  const conn = await db.getConnection();
-  await conn.beginTransaction();
-
-  try {
-    // 1. Delete answers (NEW — IMPORTANT)
-    await conn.query(`
-      DELETE ea FROM evaluation_answers ea
-      JOIN evaluation_criteria ec ON ea.criterion_id = ec.id
-      JOIN evaluation_sections es ON ec.section_id = es.id
-      WHERE es.template_id = ?
-    `, [id]);
-
-    // 2. Delete options
-    await conn.query(`
-      DELETE eo FROM evaluation_options eo
-      JOIN evaluation_criteria ec ON eo.criterion_id = ec.id
-      JOIN evaluation_sections es ON ec.section_id = es.id
-      WHERE es.template_id = ?
-    `, [id]);
-
-    // 3. Delete criteria
-    await conn.query(`
-      DELETE ec FROM evaluation_criteria ec
-      JOIN evaluation_sections es ON ec.section_id = es.id
-      WHERE es.template_id = ?
-    `, [id]);
-
-    // 4. Delete sections
-    await conn.query(
-      `DELETE FROM evaluation_sections WHERE template_id = ?`,
-      [id]
-    );
-
-    // 5. Delete template
-    await conn.query(
-      `DELETE FROM evaluation_templates WHERE id = ?`,
-      [id]
-    );
-
-    await conn.commit();
-
-    res.json({ success: true });
-
-  } catch (err) {
-    await conn.rollback();
-    console.error("DELETE TEMPLATE ERROR:", err);
-    res.status(500).json({ error: err.message });
-  } finally {
-    conn.release();
-  }
-};
-
-/* =====================================================
-   PUBLISH TEMPLATE
+   PUBLISH TEMPLATE (UPDATED)
 ===================================================== */
 exports.publishTemplate = async (req, res) => {
   const { id } = req.params;
 
   try {
-    await db.query(
-      `UPDATE evaluation_templates
-       SET status='published',
-           is_active = 1
-       WHERE id=?`,
-      [id]
-    );
+    const link = `${process.env.CLIENT_URL}/evaluate/${id}`;
+
+    await db.query(`
+      UPDATE evaluation_templates
+      SET status='published',
+          is_active = 1,
+          link = ?,
+          is_accepting_responses = 1
+      WHERE id=?
+    `, [link, id]);
 
     res.json({
       success: true,
-      link: `${process.env.CLIENT_URL}/evaluate/${id}`
+      link
     });
 
   } catch (err) {
@@ -343,172 +296,22 @@ exports.publishTemplate = async (req, res) => {
 };
 
 /* =====================================================
-   BUILDER
+   TOGGLE ACCEPTING RESPONSES
 ===================================================== */
-exports.getBuilder = async (req, res) => {
-  const { templateId } = req.params;
+exports.toggleAcceptingResponses = async (req, res) => {
+  const { id } = req.params;
+  const { accepting } = req.body;
 
   try {
-    const [[tpl]] = await db.query(
-      `SELECT * FROM evaluation_templates WHERE id=?`,
-      [templateId]
-    );
-
-    const sections = await loadSections(templateId);
-
-    res.json({
-      template: tpl,
-      sections
-    });
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
-
-exports.saveBuilder = async (req, res) => {
-  const { templateId } = req.params;
-  const { formSettings, ratingScale, sections } = req.body;
-
-  const conn = await db.getConnection();
-  await conn.beginTransaction();
-
-  try {
-    await conn.query(
-      `UPDATE evaluation_templates
-       SET name=?, description=?, course_id=?, academic_year=?,
-           rating_scale=?, rating_min_label=?, rating_max_label=?, is_active=?
-       WHERE id=?`,
-      [
-        formSettings.title,
-        formSettings.description,
-        formSettings.courseId,
-        formSettings.academicYear,
-        ratingScale.type,
-        ratingScale.minLabel,
-        ratingScale.maxLabel,
-        formSettings.active ? 1 : 0,
-        templateId
-      ]
-    );
-
-    await conn.query(`
-      DELETE FROM evaluation_criteria
-      WHERE section_id IN (
-        SELECT id FROM evaluation_sections WHERE template_id=?
-      )
-    `, [templateId]);
-
-    await conn.query(
-      `DELETE FROM evaluation_sections WHERE template_id=?`,
-      [templateId]
-    );
-
-    await insertSections(conn, templateId, sections);
-
-    await conn.commit();
+    await db.query(`
+      UPDATE evaluation_templates
+      SET is_accepting_responses = ?
+      WHERE id = ?
+    `, [accepting ? 1 : 0, id]);
 
     res.json({ success: true });
 
   } catch (err) {
-    await conn.rollback();
     res.status(500).json({ error: err.message });
-  } finally {
-    conn.release();
   }
 };
-
-/* =====================================================
-   HELPERS
-===================================================== */
-
-async function loadSections(templateId) {
-  const [sections] = await db.query(
-    `SELECT * FROM evaluation_sections
-     WHERE template_id=?
-     ORDER BY sort_order`,
-    [templateId]
-  );
-
-  for (const s of sections) {
-    const [criteria] = await db.query(
-      `SELECT * FROM evaluation_criteria
-       WHERE section_id=?
-       ORDER BY sort_order`,
-      [s.id]
-    );
-
-    s.criteria = [];
-
-    for (const c of criteria) {
-      let options = [];
-
-      if (c.type === "multiple_choice") {
-        const [optRows] = await db.query(
-          `SELECT id, option_text
-           FROM evaluation_options
-           WHERE criterion_id=?
-           ORDER BY sort_order`,
-          [c.id]
-        );
-
-        options = optRows;
-      }
-
-      s.criteria.push({
-        id: c.id,
-        title: c.title,
-        type: c.type,
-        required: !!c.is_required,
-        options
-      });
-    }
-  }
-
-  return sections;
-}
-
-async function insertSections(conn, templateId, sections) {
-  for (let sIndex = 0; sIndex < (sections || []).length; sIndex++) {
-    const s = sections[sIndex];
-
-    const [sec] = await conn.query(
-      `INSERT INTO evaluation_sections
-       (template_id, title, sort_order)
-       VALUES (?,?,?)`,
-      [templateId, s.title, sIndex]
-    );
-
-    const sectionId = sec.insertId;
-
-    for (let cIndex = 0; cIndex < (s.criteria || []).length; cIndex++) {
-      const c = s.criteria[cIndex];
-
-      const [crit] = await conn.query(
-        `INSERT INTO evaluation_criteria
-         (section_id, title, type, is_required, sort_order)
-         VALUES (?,?,?,?,?)`,
-        [
-          sectionId,
-          c.title,
-          c.type,
-          c.required ? 1 : 0,
-          cIndex
-        ]
-      );
-
-      const criterionId = crit.insertId;
-
-      if (c.type === "multiple_choice" && c.options) {
-        for (let oIndex = 0; oIndex < c.options.length; oIndex++) {
-          await conn.query(
-            `INSERT INTO evaluation_options
-             (criterion_id, option_text, sort_order)
-             VALUES (?,?,?)`,
-            [criterionId, c.options[oIndex], oIndex]
-          );
-        }
-      }
-    }
-  }
-}
