@@ -373,3 +373,78 @@ exports.toggleAcceptingResponses = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+/* =====================================================
+   BUILDER
+===================================================== */
+exports.getBuilder = async (req, res) => {
+  const { templateId } = req.params;
+
+  try {
+    const [[tpl]] = await db.query(
+      `SELECT * FROM evaluation_templates WHERE id=?`,
+      [templateId]
+    );
+
+    const sections = await loadSections(templateId);
+
+    res.json({
+      template: tpl,
+      sections
+    });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.saveBuilder = async (req, res) => {
+  const { templateId } = req.params;
+  const { formSettings, ratingScale, sections } = req.body;
+
+  const conn = await db.getConnection();
+  await conn.beginTransaction();
+
+  try {
+    await conn.query(`
+      UPDATE evaluation_templates
+      SET name=?, description=?, course_id=?, academic_year=?,
+          rating_scale=?, rating_min_label=?, rating_max_label=?, is_active=?
+      WHERE id=?
+    `, [
+      formSettings.title,
+      formSettings.description,
+      formSettings.courseId,
+      formSettings.academicYear,
+      ratingScale.type,
+      ratingScale.minLabel,
+      ratingScale.maxLabel,
+      formSettings.active ? 1 : 0,
+      templateId
+    ]);
+
+    await conn.query(`
+      DELETE FROM evaluation_criteria
+      WHERE section_id IN (
+        SELECT id FROM evaluation_sections WHERE template_id=?
+      )
+    `, [templateId]);
+
+    await conn.query(
+      `DELETE FROM evaluation_sections WHERE template_id=?`,
+      [templateId]
+    );
+
+    await insertSections(conn, templateId, sections);
+
+    await conn.commit();
+
+    res.json({ success: true });
+
+  } catch (err) {
+    await conn.rollback();
+    res.status(500).json({ error: err.message });
+  } finally {
+    conn.release();
+  }
+};
