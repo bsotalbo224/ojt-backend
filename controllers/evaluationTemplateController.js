@@ -56,7 +56,8 @@ exports.listCoordinatorTemplates = async (req, res) => {
         t.is_active AS isActive,
         t.status,
         t.link,
-        t.is_accepting_responses AS isAcceptingResponses
+        t.is_accepting_responses AS isAcceptingResponses,
+        t.created_at AS createdAt
       FROM evaluation_templates t
       LEFT JOIN courses c ON c.course_id = t.course_id
       WHERE t.is_active = 1
