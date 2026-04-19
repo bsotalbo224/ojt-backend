@@ -212,21 +212,27 @@ class CoordinatorModel {
       AND n.status = 'submitted'
     `, [deptId]);
 
-    return {
-      totalStudents: students.totalStudents,
-      ongoing: ongoing.ongoing,
-      submittedLogs: submittedLogs.submittedLogs,
-      submittedNarratives: submittedNarratives.submittedNarratives,
-      flaggedAttendance: flaggedAttendance.flaggedAttendance
-    };
-
-    const [[flaggedAttendance]] = await db.query(`
+    // ===============================
+// FLAGGED ATTENDANCE
+// ===============================
+const [[flaggedAttendance]] = await db.query(`
   SELECT COUNT(*) AS flaggedAttendance
   FROM attendance a
   JOIN students s ON s.student_id = a.student_id
   WHERE s.department_id = ?
   AND a.location_status = 'flagged'
 `, [deptId]);
+
+// ===============================
+// RETURN (AFTER ALL QUERIES)
+// ===============================
+return {
+  totalStudents: students.totalStudents,
+  ongoing: ongoing.ongoing,
+  submittedLogs: submittedLogs.submittedLogs,
+  submittedNarratives: submittedNarratives.submittedNarratives,
+  flaggedAttendance: flaggedAttendance.flaggedAttendance
+};
   }
 
   // =========================
