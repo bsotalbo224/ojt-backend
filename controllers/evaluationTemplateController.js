@@ -17,7 +17,7 @@ const insertSections = async (conn, templateId, sections) => {
         const [critResult] = await conn.query(
           `INSERT INTO evaluation_criteria (section_id, title, type)
            VALUES (?, ?, ?)`,
-          [sectionId, crit.question || crit.label || "", crit.type || "rating"]
+          [sectionId, crit.title || crit.question || crit.label || "", crit.type || "rating"]
         );
 
         const criterionId = critResult.insertId;
