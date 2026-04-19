@@ -192,6 +192,7 @@ exports.createTemplate = async (req, res) => {
 
   } catch (err) {
     await conn.rollback();
+    console.error(" CREATE TEMPLATE ERROR:", err);
     res.status(500).json({ error: err.message });
   } finally {
     conn.release();
