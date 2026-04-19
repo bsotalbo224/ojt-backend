@@ -204,7 +204,7 @@ exports.createTemplate = async (req, res) => {
       description,
       courseId,
       academicYear,
-      0,
+      req.body.active ? 1 : 0,
       ratingSettings.scale,
       ratingSettings.minLabel,
       ratingSettings.maxLabel,
