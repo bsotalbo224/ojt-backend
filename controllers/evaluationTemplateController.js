@@ -328,9 +328,13 @@ exports.updateTemplate = async (req, res) => {
       [id]
     );
 
-    await insertSections(conn, id, sections);
+    const safeSections = Array.isArray(sections) ? sections : [];
 
-    await conn.commit();
+    if (safeSections.length > 0) {
+      await insertSections(conn, id, safeSections);
+    }
+
+    await conn.commit();  
 
     res.json({ success: true });
 
