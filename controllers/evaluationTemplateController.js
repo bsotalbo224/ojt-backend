@@ -144,6 +144,7 @@ exports.toggleActiveTemplate = async (req, res) => {
 exports.createTemplate = async (req, res) => {
   console.log("=== CREATE TEMPLATE HIT ===");
   console.log("REQ BODY:", req.body);
+  console.log("CRITERIA:", section.criteria);
   const {
     name,
     description,
