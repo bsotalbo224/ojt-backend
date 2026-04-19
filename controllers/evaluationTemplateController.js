@@ -37,6 +37,40 @@ const insertSections = async (conn, templateId, sections) => {
   }
 };
 
+const loadSections = async (templateId) => {
+  const [sections] = await db.query(
+    `SELECT id, title
+     FROM evaluation_sections
+     WHERE template_id = ?
+     ORDER BY sort_order ASC`,
+    [templateId]
+  );
+
+  const result = [];
+
+  for (const section of sections) {
+    const [criteria] = await db.query(
+      `SELECT id, title, type
+       FROM evaluation_criteria
+       WHERE section_id = ?
+       ORDER BY sort_order ASC`,
+      [section.id]
+    );
+
+    result.push({
+      id: section.id,
+      title: section.title,
+      criteria: criteria.map(c => ({
+        id: c.id,
+        question: c.title,
+        type: c.type
+      }))
+    });
+  }
+
+  return result;
+};
+
 /* =====================================================
    LIST ADMIN TEMPLATES
 ===================================================== */
