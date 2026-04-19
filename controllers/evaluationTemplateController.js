@@ -1,5 +1,42 @@
 const db = require("../config/db");
 
+const insertSections = async (conn, templateId, sections) => {
+  if (!Array.isArray(sections)) return;
+
+  for (const section of sections) {
+    const [sectionResult] = await conn.query(
+      `INSERT INTO evaluation_sections (template_id, title)
+       VALUES (?, ?)`,
+      [templateId, section.title]
+    );
+
+    const sectionId = sectionResult.insertId;
+
+    if (Array.isArray(section.criteria)) {
+      for (const crit of section.criteria) {
+        const [critResult] = await conn.query(
+          `INSERT INTO evaluation_criteria (section_id, question, type)
+           VALUES (?, ?, ?)`,
+          [sectionId, crit.question, crit.type || "rating"]
+        );
+
+        const criterionId = critResult.insertId;
+
+        // Optional: multiple choice
+        if (crit.type === "multiple_choice" && Array.isArray(crit.options)) {
+          for (const opt of crit.options) {
+            await conn.query(
+              `INSERT INTO evaluation_options (criterion_id, option_text)
+               VALUES (?, ?)`,
+              [criterionId, opt]
+            );
+          }
+        }
+      }
+    }
+  }
+};
+
 /* =====================================================
    LIST ADMIN TEMPLATES
 ===================================================== */
@@ -143,7 +180,11 @@ exports.createTemplate = async (req, res) => {
 
     const templateId = tpl.insertId;
 
-    await insertSections(conn, templateId, sections);
+    const safeSections = Array.isArray(sections) ? sections : [];
+
+    if (safeSections.length > 0) {
+      await insertSections(conn, templateId, safeSections);
+    }
 
     await conn.commit();
 
