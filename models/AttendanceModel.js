@@ -87,7 +87,7 @@ class AttendanceModel {
       return existing[0].attendance_id;
     }
 
-    let location_status = "discrepancy";
+    let location_status = "flagged";
 
     if (latitude && longitude) {
 
@@ -128,7 +128,7 @@ class AttendanceModel {
         if (distance <= location.radius_meters) {
           location_status = "verified";
         } else {
-          location_status = "discrepancy";
+          location_status = "flagged";
         }
       }
     }

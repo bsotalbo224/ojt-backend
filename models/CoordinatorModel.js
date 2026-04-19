@@ -217,7 +217,16 @@ class CoordinatorModel {
       ongoing: ongoing.ongoing,
       submittedLogs: submittedLogs.submittedLogs,
       submittedNarratives: submittedNarratives.submittedNarratives,
+      flaggedAttendance: flaggedAttendance.flaggedAttendance
     };
+
+    const [[flaggedAttendance]] = await db.query(`
+  SELECT COUNT(*) AS flaggedAttendance
+  FROM attendance a
+  JOIN students s ON s.student_id = a.student_id
+  WHERE s.department_id = ?
+  AND a.location_status = 'flagged'
+`, [deptId]);
   }
 
   // =========================
@@ -350,52 +359,52 @@ class CoordinatorModel {
   // =========================
   // ASSIGN COMPANY (coordinator)
   // =========================
-static async assignCompany(studentId, companyId) {
+  static async assignCompany(studentId, companyId) {
 
-  // Check if company exists and is ACTIVE
-  const [[company]] = await db.query(
-    `SELECT company_id, is_active 
+    // Check if company exists and is ACTIVE
+    const [[company]] = await db.query(
+      `SELECT company_id, is_active 
      FROM companies 
      WHERE company_id = ?`,
-    [companyId]
-  );
+      [companyId]
+    );
 
-  if (!company) {
-    throw new Error("Company not found");
-  }
+    if (!company) {
+      throw new Error("Company not found");
+    }
 
-  if (company.is_active !== 1) {
-    throw new Error("Cannot assign inactive company");
-  }
+    if (company.is_active !== 1) {
+      throw new Error("Cannot assign inactive company");
+    }
 
-  // Assign company
-  await db.query(
-    `UPDATE students
+    // Assign company
+    await db.query(
+      `UPDATE students
      SET company_id = ?
      WHERE student_id = ?`,
-    [companyId, studentId]
-  );
+      [companyId, studentId]
+    );
 
-  // Notify student
-  const [[row]] = await db.query(`
+    // Notify student
+    const [[row]] = await db.query(`
     SELECT s.user_id, comp.company_name
     FROM students s
     LEFT JOIN companies comp ON comp.company_id = s.company_id
     WHERE s.student_id = ?
   `, [studentId]);
 
-  if (row?.user_id) {
-    await sendNotification({
-      user_id: row.user_id,
-      title: "OJT Placement Assigned",
-      message: `You have been assigned to ${row.company_name}.`,
-      type: "placement",
-      link: "/student/dashboard"
-    });
-  }
+    if (row?.user_id) {
+      await sendNotification({
+        user_id: row.user_id,
+        title: "OJT Placement Assigned",
+        message: `You have been assigned to ${row.company_name}.`,
+        type: "placement",
+        link: "/student/dashboard"
+      });
+    }
 
-  return true;
-}
+    return true;
+  }
 }
 
 module.exports = CoordinatorModel;
