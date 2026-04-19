@@ -62,7 +62,7 @@ const loadSections = async (templateId) => {
       title: section.title,
       criteria: criteria.map(c => ({
         id: c.id,
-        question: c.title,
+        title: c.title,
         type: c.type
       }))
     });
