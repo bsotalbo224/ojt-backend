@@ -3,8 +3,8 @@ const router = express.Router();
 
 const RequiredHoursController = require("../controllers/RequiredHoursController");
 
-const { verifyToken } = require("../middlewares/authMiddleware");
-const { requireRole } = require("../middlewares/roleMiddleware");
+const { verifyToken } = require("../middleware/authMiddleware");
+const { requireRole } = require("../middleware/roleMiddleware");
 
 // =========================
 // GET ALL (Admin + Coordinator)
