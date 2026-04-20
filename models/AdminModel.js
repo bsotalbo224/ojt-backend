@@ -41,7 +41,7 @@
 
         CONCAT(cu.f_name, ' ', cu.l_name) AS coordinator,
 
-        s.ojt_hours_required AS totalHours,
+        COALESCE(s.ojt_hours_required, c.required_hours) AS totalHours,
 
         IFNULL(
           SUM(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)) / 3600),
