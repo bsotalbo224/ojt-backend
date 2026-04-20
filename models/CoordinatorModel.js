@@ -256,7 +256,7 @@ return {
     s.user_id,
     u.photo,
     cr.course_code AS course,
-    s.ojt_hours_required,
+    COALESCE(s.ojt_hours_required, cr.required_hours) AS required_hours,
 
     COALESCE(
       ROUND(SUM(TIMESTAMPDIFF(MINUTE, a.time_in, a.time_out)) / 60),
@@ -309,7 +309,7 @@ return {
     const [[student]] = await db.query(`
     SELECT 
       s.student_id,
-      s.ojt_hours_required,
+      COALESCE(s.ojt_hours_required, cr.required_hours) AS required_hours,
       u.photo,
       cr.course_code AS course,
       comp.company_name AS company,

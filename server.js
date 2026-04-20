@@ -117,6 +117,7 @@ const coordinatorStudentsRoutes = require("./routes/coordinatorStudents");
 
 const companyRoutes = require("./routes/companies");
 const studentRoutes = require("./routes/student");
+const requiredHoursRoutes = require("./routes/requiredHoursRoutes");
 
 const logsRoutes = require("./routes/logs");
 const attendanceRoutes = require("./routes/attendance");
@@ -213,6 +214,8 @@ app.use("/api/messages", messageRoutes);
 // CORE SYSTEM ROUTES
 // =========================
 //////////////////////////////////////////////////////
+
+app.use("/api/required-hours", requiredHoursRoutes);
 
 // admin
 app.use("/api/admin", adminRoutes);
