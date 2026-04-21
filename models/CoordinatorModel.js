@@ -214,11 +214,10 @@ class CoordinatorModel {
   `, [deptId]);
 
   // =========================
-  // FIXED HOURS CALCULATION (SEPARATED LOGIC)
+  // FIXED HOURS CALCULATION
   // =========================
   const [[hoursData]] = await db.query(`
     SELECT 
-      -- avg hours logged (attendance only)
       COALESCE((
         SELECT ROUND(AVG(TIMESTAMPDIFF(MINUTE, a.time_in, a.time_out) / 60))
         FROM attendance a
@@ -228,9 +227,8 @@ class CoordinatorModel {
         AND a.time_out IS NOT NULL
       ), 0) AS avgHoursLogged,
 
-      -- required hours (courses only, NO attendance join)
       COALESCE((
-        SELECT ROUND(AVG(c.required_hours))
+        SELECT ROUND(AVG(NULLIF(c.required_hours, 0)))
         FROM students s3
         JOIN courses c ON c.course_id = s3.course_id
         WHERE s3.department_id = ?
@@ -249,7 +247,40 @@ class CoordinatorModel {
   `, [deptId]);
 
   // =========================
-  // FINAL SAFE RETURN
+  // RECENT ACTIVITY
+  // =========================
+  const [recentActivity] = await db.query(`
+    (
+      SELECT 
+        u.f_name,
+        u.l_name,
+        'log' AS type,
+        dl.created_at
+      FROM daily_logs dl
+      JOIN students s ON s.student_id = dl.student_id
+      JOIN users u ON u.user_id = s.user_id
+      WHERE s.department_id = ?
+      AND dl.status = 'submitted'
+    )
+    UNION ALL
+    (
+      SELECT 
+        u.f_name,
+        u.l_name,
+        'narrative' AS type,
+        nr.created_at
+      FROM narrative_reports nr
+      JOIN students s ON s.student_id = nr.student_id
+      JOIN users u ON u.user_id = s.user_id
+      WHERE s.department_id = ?
+      AND nr.status = 'submitted'
+    )
+    ORDER BY created_at DESC
+    LIMIT 3
+  `, [deptId, deptId]);
+
+  // =========================
+  // FINAL RETURN
   // =========================
   return {
     totalStudents: students.totalStudents || 0,
@@ -258,9 +289,10 @@ class CoordinatorModel {
     submittedNarratives: submittedNarratives.submittedNarratives || 0,
     flaggedAttendance: flaggedAttendance.flaggedAttendance || 0,
 
-    // FIXED VALUES
     avgHoursLogged: hoursData.avgHoursLogged || 0,
-    requiredHours: hoursData.requiredHours || 0
+    requiredHours: hoursData.requiredHours || 0,
+
+    recentActivity: recentActivity || []
   };
 }
 
