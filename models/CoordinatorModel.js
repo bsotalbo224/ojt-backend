@@ -168,87 +168,101 @@ class CoordinatorModel {
   // DASHBOARD STATS (coordinator)
   // =========================
   static async getDashboardStats(coordinatorUserId) {
-    // coordinator department
-    const [[coord]] = await db.query(`
-      SELECT department_id
-      FROM coordinators
-      WHERE user_id = ?
-    `, [coordinatorUserId]);
+  // coordinator department
+  const [[coord]] = await db.query(`
+    SELECT department_id
+    FROM coordinators
+    WHERE user_id = ?
+  `, [coordinatorUserId]);
 
-    if (!coord) return null;
+  if (!coord) return null;
 
-    const deptId = coord.department_id;
+  const deptId = coord.department_id;
 
-    // total students in dept
-    const [[students]] = await db.query(`
-      SELECT COUNT(*) AS totalStudents
-      FROM students
-      WHERE department_id = ?
-    `, [deptId]);
+  // total students
+  const [[students]] = await db.query(`
+    SELECT COUNT(*) AS totalStudents
+    FROM students
+    WHERE department_id = ?
+  `, [deptId]);
 
-    // ongoing OJT (assigned company)
-    const [[ongoing]] = await db.query(`
-      SELECT COUNT(*) AS ongoing
-      FROM students
-      WHERE department_id = ?
-      AND company_id IS NOT NULL
-    `, [deptId]);
+  // ongoing OJT
+  const [[ongoing]] = await db.query(`
+    SELECT COUNT(*) AS ongoing
+    FROM students
+    WHERE department_id = ?
+    AND company_id IS NOT NULL
+  `, [deptId]);
 
-    // pending daily logs
-    const [[submittedLogs]] = await db.query(`
-      SELECT COUNT(*) AS submittedLogs
-      FROM daily_logs dl
-      JOIN students s ON s.student_id = dl.student_id
-      WHERE s.department_id = ?
-      AND dl.status = 'submitted'
-    `, [deptId]);
+  // submitted logs
+  const [[submittedLogs]] = await db.query(`
+    SELECT COUNT(*) AS submittedLogs
+    FROM daily_logs dl
+    JOIN students s ON s.student_id = dl.student_id
+    WHERE s.department_id = ?
+    AND dl.status = 'submitted'
+  `, [deptId]);
 
-    // pending narratives
-    const [[submittedNarratives]] = await db.query(`
-      SELECT COUNT(*) AS submittedNarratives
-      FROM narrative_reports n
-      JOIN students s ON s.student_id = n.student_id
-      WHERE s.department_id = ?
-      AND n.status = 'submitted'
-    `, [deptId]);
+  // submitted narratives
+  const [[submittedNarratives]] = await db.query(`
+    SELECT COUNT(*) AS submittedNarratives
+    FROM narrative_reports n
+    JOIN students s ON s.student_id = n.student_id
+    WHERE s.department_id = ?
+    AND n.status = 'submitted'
+  `, [deptId]);
 
-    const [[hoursData]] = await db.query(`
-  SELECT 
-    ROUND(AVG(TIMESTAMPDIFF(MINUTE, a.time_in, a.time_out) / 60)) AS avgHoursLogged,
-    ROUND(AVG(c.required_hours)) AS requiredHours
-  FROM students s
-  JOIN courses c ON c.course_id = s.course_id
-  LEFT JOIN attendance a 
-    ON a.student_id = s.student_id
-    AND a.time_in IS NOT NULL
-    AND a.time_out IS NOT NULL
-  WHERE s.department_id = ?
-`, [deptId]);
+  // ===============================
+  // FIXED HOURS COMPLETION
+  // ===============================
+  const [[hoursData]] = await db.query(`
+    SELECT 
+      COALESCE(
+        ROUND(AVG(TIMESTAMPDIFF(MINUTE, a.time_in, a.time_out) / 60)),
+        0
+      ) AS avgHoursLogged,
 
-    // ===============================
-// FLAGGED ATTENDANCE
-// ===============================
-const [[flaggedAttendance]] = await db.query(`
-  SELECT COUNT(*) AS flaggedAttendance
-  FROM attendance a
-  JOIN students s ON s.student_id = a.student_id
-  WHERE s.department_id = ?
-  AND a.location_status = 'flagged'
-`, [deptId]);
+      COALESCE(
+        ROUND(AVG(c.required_hours)),
+        0
+      ) AS requiredHours
 
-// ===============================
-// RETURN (AFTER ALL QUERIES)
-// ===============================
-return {
-  totalStudents: students.totalStudents,
-  ongoing: ongoing.ongoing,
-  submittedLogs: submittedLogs.submittedLogs,
-  submittedNarratives: submittedNarratives.submittedNarratives,
-  flaggedAttendance: flaggedAttendance.flaggedAttendance,
-  avgHoursLogged: hoursData.avgHoursLogged,
-  requiredHours: hoursData.requiredHours
-};
-  }
+    FROM students s
+    LEFT JOIN courses c ON c.course_id = s.course_id
+    LEFT JOIN attendance a 
+      ON a.student_id = s.student_id
+      AND a.time_in IS NOT NULL
+      AND a.time_out IS NOT NULL
+
+    WHERE s.department_id = ?
+  `, [deptId]);
+
+  // ===============================
+  // FLAGGED ATTENDANCE
+  // ===============================
+  const [[flaggedAttendance]] = await db.query(`
+    SELECT COUNT(*) AS flaggedAttendance
+    FROM attendance a
+    JOIN students s ON s.student_id = a.student_id
+    WHERE s.department_id = ?
+    AND a.location_status = 'flagged'
+  `, [deptId]);
+
+  // ===============================
+  // FINAL RETURN (SAFE VALUES)
+  // ===============================
+  return {
+    totalStudents: students.totalStudents || 0,
+    ongoing: ongoing.ongoing || 0,
+    submittedLogs: submittedLogs.submittedLogs || 0,
+    submittedNarratives: submittedNarratives.submittedNarratives || 0,
+    flaggedAttendance: flaggedAttendance.flaggedAttendance || 0,
+
+    // CRITICAL FIX
+    avgHoursLogged: hoursData.avgHoursLogged || 0,
+    requiredHours: hoursData.requiredHours || 0
+  };
+}
 
   // =========================
   // COORDINATOR STUDENTS
