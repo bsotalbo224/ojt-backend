@@ -168,7 +168,9 @@ class CoordinatorModel {
   // DASHBOARD STATS (coordinator)
   // =========================
   static async getDashboardStats(coordinatorUserId) {
-  // coordinator department
+  // =========================
+  // GET COORDINATOR DEPARTMENT
+  // =========================
   const [[coord]] = await db.query(`
     SELECT department_id
     FROM coordinators
@@ -179,14 +181,15 @@ class CoordinatorModel {
 
   const deptId = coord.department_id;
 
-  // total students
+  // =========================
+  // BASIC COUNTS
+  // =========================
   const [[students]] = await db.query(`
     SELECT COUNT(*) AS totalStudents
     FROM students
     WHERE department_id = ?
   `, [deptId]);
 
-  // ongoing OJT
   const [[ongoing]] = await db.query(`
     SELECT COUNT(*) AS ongoing
     FROM students
@@ -194,7 +197,6 @@ class CoordinatorModel {
     AND company_id IS NOT NULL
   `, [deptId]);
 
-  // submitted logs
   const [[submittedLogs]] = await db.query(`
     SELECT COUNT(*) AS submittedLogs
     FROM daily_logs dl
@@ -203,7 +205,6 @@ class CoordinatorModel {
     AND dl.status = 'submitted'
   `, [deptId]);
 
-  // submitted narratives
   const [[submittedNarratives]] = await db.query(`
     SELECT COUNT(*) AS submittedNarratives
     FROM narrative_reports n
@@ -212,34 +213,33 @@ class CoordinatorModel {
     AND n.status = 'submitted'
   `, [deptId]);
 
-  // ===============================
-  // FIXED HOURS COMPLETION
-  // ===============================
+  // =========================
+  // FIXED HOURS CALCULATION (SEPARATED LOGIC)
+  // =========================
   const [[hoursData]] = await db.query(`
     SELECT 
-      COALESCE(
-        ROUND(AVG(TIMESTAMPDIFF(MINUTE, a.time_in, a.time_out) / 60)),
-        0
-      ) AS avgHoursLogged,
+      -- avg hours logged (attendance only)
+      COALESCE((
+        SELECT ROUND(AVG(TIMESTAMPDIFF(MINUTE, a.time_in, a.time_out) / 60))
+        FROM attendance a
+        JOIN students s2 ON s2.student_id = a.student_id
+        WHERE s2.department_id = ?
+        AND a.time_in IS NOT NULL
+        AND a.time_out IS NOT NULL
+      ), 0) AS avgHoursLogged,
 
-      COALESCE(
-        ROUND(AVG(c.required_hours)),
-        0
-      ) AS requiredHours
+      -- required hours (courses only, NO attendance join)
+      COALESCE((
+        SELECT ROUND(AVG(c.required_hours))
+        FROM students s3
+        JOIN courses c ON c.course_id = s3.course_id
+        WHERE s3.department_id = ?
+      ), 0) AS requiredHours
+  `, [deptId, deptId]);
 
-    FROM students s
-    LEFT JOIN courses c ON c.course_id = s.course_id
-    LEFT JOIN attendance a 
-      ON a.student_id = s.student_id
-      AND a.time_in IS NOT NULL
-      AND a.time_out IS NOT NULL
-
-    WHERE s.department_id = ?
-  `, [deptId]);
-
-  // ===============================
+  // =========================
   // FLAGGED ATTENDANCE
-  // ===============================
+  // =========================
   const [[flaggedAttendance]] = await db.query(`
     SELECT COUNT(*) AS flaggedAttendance
     FROM attendance a
@@ -248,9 +248,9 @@ class CoordinatorModel {
     AND a.location_status = 'flagged'
   `, [deptId]);
 
-  // ===============================
-  // FINAL RETURN (SAFE VALUES)
-  // ===============================
+  // =========================
+  // FINAL SAFE RETURN
+  // =========================
   return {
     totalStudents: students.totalStudents || 0,
     ongoing: ongoing.ongoing || 0,
@@ -258,7 +258,7 @@ class CoordinatorModel {
     submittedNarratives: submittedNarratives.submittedNarratives || 0,
     flaggedAttendance: flaggedAttendance.flaggedAttendance || 0,
 
-    // CRITICAL FIX
+    // FIXED VALUES
     avgHoursLogged: hoursData.avgHoursLogged || 0,
     requiredHours: hoursData.requiredHours || 0
   };
