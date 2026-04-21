@@ -212,6 +212,19 @@ class CoordinatorModel {
       AND n.status = 'submitted'
     `, [deptId]);
 
+    const [[hoursData]] = await db.query(`
+  SELECT 
+    ROUND(AVG(TIMESTAMPDIFF(MINUTE, a.time_in, a.time_out) / 60)) AS avgHoursLogged,
+    ROUND(AVG(c.required_hours)) AS requiredHours
+  FROM students s
+  JOIN courses c ON c.course_id = s.course_id
+  LEFT JOIN attendance a 
+    ON a.student_id = s.student_id
+    AND a.time_in IS NOT NULL
+    AND a.time_out IS NOT NULL
+  WHERE s.department_id = ?
+`, [deptId]);
+
     // ===============================
 // FLAGGED ATTENDANCE
 // ===============================
@@ -231,7 +244,9 @@ return {
   ongoing: ongoing.ongoing,
   submittedLogs: submittedLogs.submittedLogs,
   submittedNarratives: submittedNarratives.submittedNarratives,
-  flaggedAttendance: flaggedAttendance.flaggedAttendance
+  flaggedAttendance: flaggedAttendance.flaggedAttendance,
+  avgHoursLogged: hoursData.avgHoursLogged,
+  requiredHours: hoursData.requiredHours
 };
   }
 
