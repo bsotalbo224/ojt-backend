@@ -12,6 +12,7 @@ class CourseModel {
         c.course_code,
         c.course_name,
         c.department_id,
+        c.required_hours,
         d.department_name
       FROM courses c
       LEFT JOIN departments d 
@@ -31,7 +32,8 @@ class CourseModel {
         course_id,
         course_code,
         course_name,
-        department_id
+        department_id,
+        required_hours
       FROM courses
       WHERE department_id = ?
       ORDER BY course_name ASC
@@ -49,7 +51,8 @@ class CourseModel {
         course_id,
         course_code,
         course_name,
-        department_id
+        department_id,
+        required_hours
       FROM courses
       WHERE course_id = ?
     `, [course_id]);
@@ -61,13 +64,13 @@ class CourseModel {
   // CREATE COURSE (admin)
   // =========================
   static async create(data) {
-    const { course_code, course_name, department_id } = data;
+    const { course_code, course_name, department_id, required_hours } = data;
 
     const [result] = await db.query(`
       INSERT INTO courses
-      (course_code, course_name, department_id)
-      VALUES (?, ?, ?)
-    `, [course_code, course_name, department_id]);
+      (course_code, course_name, department_id, required_hours)
+      VALUES (?, ?, ?, ?)
+    `, [course_code, course_name, department_id, required_hours]);
 
     return result.insertId;
   }
@@ -76,13 +79,13 @@ class CourseModel {
   // UPDATE COURSE (admin)
   // =========================
   static async update(course_id, data) {
-    const { course_code, course_name, department_id } = data;
+    const { course_code, course_name, department_id, required_hours } = data;
 
     await db.query(`
       UPDATE courses
-      SET course_code = ?, course_name = ?, department_id = ?
+      SET course_code = ?, course_name = ?, department_id = ?, required_hours = ?
       WHERE course_id = ?
-    `, [course_code, course_name, department_id, course_id]);
+    `, [course_code, course_name, department_id, required_hours, course_id]);
   }
 
   // =========================
