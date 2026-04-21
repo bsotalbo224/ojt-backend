@@ -23,9 +23,7 @@ const generateCourseCode = (name) => {
 
     const code =
       "BS" +
-      rest
-        .map((w) => w[0].toUpperCase())
-        .join("");
+      rest.map((w) => w[0].toUpperCase()).join("");
 
     return code.substring(0, 10);
   }
@@ -55,11 +53,23 @@ CREATE COURSE
 ===================================================== */
 router.post("/", async (req, res) => {
   try {
-    const { course_name, department_id } = req.body;
+    const { course_name, department_id, required_hours } = req.body;
 
+    // Basic validation
     if (!course_name || !department_id) {
       return res.status(400).json({
         message: "Course name and department required",
+      });
+    }
+
+    if (
+      required_hours === undefined ||
+      required_hours === null ||
+      isNaN(required_hours) ||
+      Number(required_hours) <= 0
+    ) {
+      return res.status(400).json({
+        message: "Required hours must be a positive number",
       });
     }
 
@@ -69,6 +79,7 @@ router.post("/", async (req, res) => {
       course_code,
       course_name,
       department_id,
+      required_hours: Number(required_hours),
     });
 
     res.json({
@@ -76,6 +87,7 @@ router.post("/", async (req, res) => {
       course_code,
       course_name,
       department_id,
+      required_hours: Number(required_hours),
     });
   } catch (err) {
     console.error("CREATE COURSE ERROR:", err);
@@ -89,11 +101,23 @@ UPDATE COURSE
 router.put("/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { course_name, department_id } = req.body;
+    const { course_name, department_id, required_hours } = req.body;
 
+    // Validation
     if (!course_name || !department_id) {
       return res.status(400).json({
         message: "Course name and department required",
+      });
+    }
+
+    if (
+      required_hours === undefined ||
+      required_hours === null ||
+      isNaN(required_hours) ||
+      Number(required_hours) <= 0
+    ) {
+      return res.status(400).json({
+        message: "Required hours must be a positive number",
       });
     }
 
@@ -103,6 +127,7 @@ router.put("/:id", async (req, res) => {
       course_code,
       course_name,
       department_id,
+      required_hours: Number(required_hours),
     });
 
     res.json({
@@ -110,6 +135,7 @@ router.put("/:id", async (req, res) => {
       course_code,
       course_name,
       department_id,
+      required_hours: Number(required_hours),
     });
   } catch (err) {
     console.error("UPDATE COURSE ERROR:", err);
