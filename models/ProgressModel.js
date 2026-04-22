@@ -18,7 +18,16 @@ class ProgressModel {
         MAX(CONCAT(cu.f_name, ' ', cu.l_name)) AS coordinator_name,
 
         ROUND(
-          IFNULL(SUM(TIMESTAMPDIFF(MINUTE,a.time_in,a.time_out))/60,0),
+          IFNULL(
+            SUM(
+              CASE 
+                WHEN a.location_status = 'verified'
+                THEN TIMESTAMPDIFF(MINUTE, a.time_in, a.time_out)
+                ELSE 0
+              END
+            ),
+            0
+          ) / 60,
           2
         ) AS completed_hours
 
@@ -108,7 +117,16 @@ class ProgressModel {
         COUNT(DISTINCT attendance_date) AS totalDays,
 
         ROUND(
-          IFNULL(SUM(TIMESTAMPDIFF(MINUTE,time_in,time_out))/60,0),
+          IFNULL(
+            SUM(
+              CASE 
+                WHEN location_status = 'verified'
+                THEN TIMESTAMPDIFF(MINUTE, time_in, time_out)
+                ELSE 0
+              END
+            ),
+            0
+          ) / 60,
           2
         ) AS totalHours,
 
