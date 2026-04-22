@@ -54,7 +54,7 @@ router.get("/", requireAuth, async (req, res) => {
 // ADMIN: CREATE STUDENT
 // POST /api/student
 // ===================================================
-router.post("/", requireAuth, requireRole("admin"), async (req, res) => {
+router.post("/", requireAuth, requireRole("admin", "coordinator"), async (req, res) => {
   try {
     const id = await StudentModel.create(req.body);
     res.status(201).json({ student_id: id });
@@ -68,7 +68,7 @@ router.post("/", requireAuth, requireRole("admin"), async (req, res) => {
 // ADMIN: UPDATE STUDENT
 // PUT /api/student/:id
 // ===================================================
-router.put("/:id", requireAuth, requireRole("admin"), async (req, res) => {
+router.put("/:id", requireAuth, requireRole("admin", "coordinator"), async (req, res) => {
   try {
     const { id } = req.params;
     const result = await StudentModel.update(id, req.body);
