@@ -313,49 +313,55 @@ class CoordinatorModel {
 
     const [rows] = await db.query(`
   SELECT 
-    s.student_id,
-    s.user_id,
-    u.photo,
-    cr.course_code AS course,
-    COALESCE(s.ojt_hours_required, cr.required_hours) AS required_hours,
+  s.student_id,
+  s.user_id,
 
-    COALESCE(
-      ROUND(SUM(TIMESTAMPDIFF(MINUTE, a.time_in, a.time_out)) / 60),
-      0
-    ) AS hours_completed,
+  u.f_name,
+  u.l_name,
+  u.email,
+  u.photo,
 
-    s.company_id,
-    comp.company_name AS company,
-    u.f_name,
-    u.l_name,
-    u.photo,
+  s.course_id,
+  cr.course_code AS course,
 
-    (
-      SELECT COUNT(*) 
-      FROM daily_logs dl2
-      WHERE dl2.student_id = s.student_id 
-      AND dl2.status = 'submitted'
-    ) AS submitted_logs,
+  s.ojt_hours_required,
 
-    (
-      SELECT COUNT(*) 
-      FROM narrative_reports nr
-      WHERE nr.student_id = s.student_id 
-      AND nr.status = 'submitted'
-    ) AS submitted_narratives
+  COALESCE(s.ojt_hours_required, cr.required_hours) AS required_hours,
 
-  FROM students s
-  JOIN users u ON u.user_id = s.user_id
-  LEFT JOIN companies comp ON comp.company_id = s.company_id
-  LEFT JOIN courses cr ON cr.course_id = s.course_id
-  LEFT JOIN attendance a 
-    ON a.student_id = s.student_id
-    AND a.time_in IS NOT NULL
-    AND a.time_out IS NOT NULL
+  COALESCE(
+    ROUND(SUM(TIMESTAMPDIFF(MINUTE, a.time_in, a.time_out)) / 60),
+    0
+  ) AS hours_completed,
 
-  WHERE s.department_id = ?
-  GROUP BY s.student_id
-  ORDER BY u.l_name ASC
+  s.company_id,
+  comp.company_name AS company,
+
+  (
+    SELECT COUNT(*) 
+    FROM daily_logs dl2
+    WHERE dl2.student_id = s.student_id 
+    AND dl2.status = 'submitted'
+  ) AS submitted_logs,
+
+  (
+    SELECT COUNT(*) 
+    FROM narrative_reports nr
+    WHERE nr.student_id = s.student_id 
+    AND nr.status = 'submitted'
+  ) AS submitted_narratives
+
+FROM students s
+JOIN users u ON u.user_id = s.user_id
+LEFT JOIN companies comp ON comp.company_id = s.company_id
+LEFT JOIN courses cr ON cr.course_id = s.course_id
+LEFT JOIN attendance a 
+  ON a.student_id = s.student_id
+  AND a.time_in IS NOT NULL
+  AND a.time_out IS NOT NULL
+
+WHERE s.department_id = ?
+GROUP BY s.student_id
+ORDER BY u.l_name ASC
 `, [deptId]);
 
     return rows;
