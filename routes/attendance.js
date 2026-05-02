@@ -8,12 +8,13 @@ const { requireRole } = require("../middleware/roleMiddleware");
 router.use(requireAuth);
 
 /* ===================================================
-STUDENT: MY ATTENDANCE
+STUDENT: MY ATTENDANCE (TODAY)
 =================================================== */
 router.get("/student", requireRole("student"), async (req, res) => {
   try {
     const studentId = req.user.student_id;
     const data = await AttendanceModel.getToday(studentId);
+
     res.json(data);
   } catch (err) {
     console.error("STUDENT ATTENDANCE ERROR:", err);
@@ -86,7 +87,7 @@ router.patch("/timeout", requireRole("student"), async (req, res) => {
 });
 
 /* ===================================================
-STUDENT: ATTENDANCE HISTORY
+STUDENT: ATTENDANCE HISTORY (UPDATED)
 =================================================== */
 router.get("/history", requireRole("student"), async (req, res) => {
   try {
@@ -95,20 +96,48 @@ router.get("/history", requireRole("student"), async (req, res) => {
     const todayRow = await AttendanceModel.getToday(studentId);
     const historyRows = await AttendanceModel.getStudentHistory(studentId);
 
+    // Format TODAY
     const today = todayRow
       ? {
           id: todayRow.attendance_id,
           date: todayRow.attendance_date,
-          timeIn: todayRow.time_in,
-          timeOut: todayRow.time_out
+
+          morning: {
+            timeIn: todayRow.morning_time_in,
+            timeOut: todayRow.morning_time_out
+          },
+
+          afternoon: {
+            timeIn: todayRow.afternoon_time_in,
+            timeOut: todayRow.afternoon_time_out
+          },
+
+          ot: {
+            timeIn: todayRow.ot_time_in,
+            timeOut: todayRow.ot_time_out
+          }
         }
       : null;
 
+    // Format HISTORY
     const history = historyRows.map(r => ({
       id: r.attendance_id,
       date: r.attendance_date,
-      timeIn: r.time_in,
-      timeOut: r.time_out
+
+      morning: {
+        timeIn: r.morning_time_in,
+        timeOut: r.morning_time_out
+      },
+
+      afternoon: {
+        timeIn: r.afternoon_time_in,
+        timeOut: r.afternoon_time_out
+      },
+
+      ot: {
+        timeIn: r.ot_time_in,
+        timeOut: r.ot_time_out
+      }
     }));
 
     res.json({
@@ -130,8 +159,6 @@ router.put("/:id/location-status", requireRole("coordinator"), async (req, res) 
   try {
     const { id } = req.params;
     const { location_status } = req.body;
-
-    console.log("UPDATE LOCATION:", id, location_status);
 
     await AttendanceModel.updateLocationStatus(id, location_status);
 

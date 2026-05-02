@@ -1,22 +1,14 @@
-  const db = require("../config/db");
+const db = require("../config/db");
 
-  class AdminModel {
+class AdminModel {
 
-  /* ===================================================
-  DASHBOARD STATS
-  =================================================== */
+  // =========================
+  // DASHBOARD STATS
+  // =========================
   static async getStats() {
-    const [[students]] = await db.query(
-      "SELECT COUNT(*) AS total FROM students"
-    );
-
-    const [[companies]] = await db.query(
-      "SELECT COUNT(*) AS total FROM companies"
-    );
-
-    const [[coordinators]] = await db.query(
-      "SELECT COUNT(*) AS total FROM coordinators"
-    );
+    const [[students]] = await db.query("SELECT COUNT(*) AS total FROM students");
+    const [[companies]] = await db.query("SELECT COUNT(*) AS total FROM companies");
+    const [[coordinators]] = await db.query("SELECT COUNT(*) AS total FROM coordinators");
 
     return {
       totalStudents: students.total,
@@ -25,9 +17,9 @@
     };
   }
 
-  /* ===================================================
-  ADMIN STUDENTS OVERVIEW
-  =================================================== */
+  // =========================
+  // STUDENTS OVERVIEW (FIXED HOURS)
+  // =========================
   static async getStudentsOverview() {
     const [rows] = await db.query(`
       SELECT
@@ -38,13 +30,18 @@
         c.course_code,
         c.course_name,
         comp.company_name,
-
         CONCAT(cu.f_name, ' ', cu.l_name) AS coordinator,
 
         COALESCE(s.ojt_hours_required, c.required_hours) AS totalHours,
 
         IFNULL(
-          SUM(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)) / 3600),
+          SUM(
+            (
+              IFNULL(TIME_TO_SEC(TIMEDIFF(a.morning_time_out, a.morning_time_in)), 0) +
+              IFNULL(TIME_TO_SEC(TIMEDIFF(a.afternoon_time_out, a.afternoon_time_in)), 0) +
+              IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
+            ) / 3600
+          ),
           0
         ) AS hoursCompleted
 
@@ -52,24 +49,11 @@
       JOIN users u ON s.user_id = u.user_id
       LEFT JOIN courses c ON s.course_id = c.course_id
       LEFT JOIN companies comp ON s.company_id = comp.company_id
-
       LEFT JOIN coordinators coord ON s.department_id = coord.department_id
       LEFT JOIN users cu ON coord.user_id = cu.user_id
-
       LEFT JOIN attendance a ON s.student_id = a.student_id
-        AND a.time_out IS NOT NULL
 
-      GROUP BY
-        s.student_id,
-        u.f_name,
-        u.l_name,
-        c.course_code,
-        c.course_name,
-        comp.company_name,
-        cu.f_name,
-        cu.l_name,
-        s.ojt_hours_required
-
+      GROUP BY s.student_id
       ORDER BY u.l_name ASC
       LIMIT 4
     `);
@@ -77,9 +61,9 @@
     return rows;
   }
 
-  /* ===================================================
-  ADMIN COORDINATORS LIST
-  =================================================== */
+  // =========================
+  // COORDINATORS LIST
+  // =========================
   static async getCoordinators() {
     const [rows] = await db.query(`
       SELECT 
@@ -89,38 +73,25 @@
         u.email,
         c.department_id,
         c.is_active,
-
         COUNT(s.student_id) AS assignedStudents
-
       FROM coordinators c
       JOIN users u ON c.user_id = u.user_id
       LEFT JOIN students s ON s.department_id = c.department_id
-
-      GROUP BY
-        c.coordinator_id,
-        u.f_name,
-        u.l_name,
-        u.email,
-        c.department_id,
-        c.is_active
-
+      GROUP BY c.coordinator_id
       ORDER BY u.l_name ASC
     `);
 
     return rows;
   }
-  /* ===================================================
-  ADMIN RECENT ACTIVITY
-  =================================================== */
+
+  // =========================
+  // RECENT ACTIVITY
+  // =========================
   static async getRecentActivity() {
     const [rows] = await db.query(`
-      SELECT
-        notif_id,
-        message,
-        type,
-        created_at
+      SELECT notif_id, message, type, created_at
       FROM notifications
-      WHERE type IN ('log', 'narrative',  'evaluation', 'coordinator')
+      WHERE type IN ('log', 'narrative', 'evaluation', 'coordinator')
       ORDER BY created_at DESC
       LIMIT 4
     `);
@@ -128,9 +99,9 @@
     return rows;
   }
 
-  /* ===================================================
-  ARCHIVED STUDENTS
-  =================================================== */
+  // =========================
+  // ARCHIVED STUDENTS
+  // =========================
   static async getArchivedStudents() {
     const [rows] = await db.query(`
       SELECT 
@@ -149,9 +120,9 @@
     return rows;
   }
 
-  /* ===================================================
-  RESTORE ARCHIVED STUDENT
-  =================================================== */
+  // =========================
+  // RESTORE STUDENT
+  // =========================
   static async restoreStudent(student_id) {
 
     const conn = await db.getConnection();
@@ -160,24 +131,17 @@
       await conn.beginTransaction();
 
       const [[student]] = await conn.query(`
-        SELECT *
-        FROM students_archive
-        WHERE student_id = ?
+        SELECT * FROM students_archive WHERE student_id = ?
       `, [student_id]);
 
       if (!student) throw new Error("Student not found");
 
       await conn.query(`
         INSERT INTO students (
-          student_id,
-          user_id,
-          section,
-          ojt_hours_required,
-          location_id,
-          company_id,
-          is_active,
-          department_id,
-          course_id
+          student_id, user_id, section,
+          ojt_hours_required, location_id,
+          company_id, is_active,
+          department_id, course_id
         )
         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
       `, [
@@ -192,8 +156,7 @@
       ]);
 
       await conn.query(`
-        DELETE FROM students_archive
-        WHERE student_id = ?
+        DELETE FROM students_archive WHERE student_id = ?
       `, [student_id]);
 
       await conn.commit();
@@ -205,7 +168,6 @@
       conn.release();
     }
   }
+}
 
-  }
-
-  module.exports = AdminModel;
+module.exports = AdminModel;

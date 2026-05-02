@@ -17,8 +17,13 @@ class ReportModel {
 
         IFNULL(
           SUM(
-            TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)) / 3600
-          ), 0
+            (
+              IFNULL(TIME_TO_SEC(TIMEDIFF(a.morning_time_out, a.morning_time_in)),0) +
+              IFNULL(TIME_TO_SEC(TIMEDIFF(a.afternoon_time_out, a.afternoon_time_in)),0) +
+              IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)),0)
+            ) / 3600
+          ), 
+          0
         ) AS completed_hours
 
       FROM students s
@@ -26,19 +31,9 @@ class ReportModel {
       LEFT JOIN courses c ON s.course_id = c.course_id
       LEFT JOIN departments d ON c.department_id = d.department_id
       LEFT JOIN companies comp ON s.company_id = comp.company_id
-      LEFT JOIN attendance a 
-        ON s.student_id = a.student_id
-        AND a.time_out IS NOT NULL
+      LEFT JOIN attendance a ON s.student_id = a.student_id
 
-      GROUP BY 
-        s.student_id,
-        u.f_name,
-        u.l_name,
-        c.course_name,
-        d.department_name,
-        comp.company_name,
-        s.ojt_hours_required
-
+      GROUP BY s.student_id
       ORDER BY u.l_name ASC
     `);
 
@@ -59,28 +54,24 @@ class ReportModel {
 
         IFNULL(
           SUM(
-            TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)) / 3600
-          ), 0
+            (
+              IFNULL(TIME_TO_SEC(TIMEDIFF(a.morning_time_out, a.morning_time_in)),0) +
+              IFNULL(TIME_TO_SEC(TIMEDIFF(a.afternoon_time_out, a.afternoon_time_in)),0) +
+              IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)),0)
+            ) / 3600
+          ),
+          0
         ) AS completed_hours
 
       FROM students s
       JOIN users u ON s.user_id = u.user_id
       JOIN courses c ON s.course_id = c.course_id
       LEFT JOIN companies comp ON s.company_id = comp.company_id
-      LEFT JOIN attendance a 
-        ON s.student_id = a.student_id
-        AND a.time_out IS NOT NULL
+      LEFT JOIN attendance a ON s.student_id = a.student_id
 
       WHERE c.department_id = ?
 
-      GROUP BY 
-        s.student_id,
-        u.f_name,
-        u.l_name,
-        c.course_name,
-        comp.company_name,
-        s.ojt_hours_required
-
+      GROUP BY s.student_id
       ORDER BY u.l_name ASC
     `, [department_id]);
 
@@ -97,9 +88,8 @@ class ReportModel {
         comp.company_name,
         COUNT(s.student_id) AS total_students
       FROM companies comp
-      LEFT JOIN students s 
-        ON comp.company_id = s.company_id
-      GROUP BY comp.company_id, comp.company_name
+      LEFT JOIN students s ON comp.company_id = s.company_id
+      GROUP BY comp.company_id
       ORDER BY comp.company_name ASC
     `);
 
@@ -115,23 +105,28 @@ class ReportModel {
         COUNT(*) AS total_students,
         SUM(
           CASE 
-            WHEN completed_hours >= required_hours 
-            THEN 1 ELSE 0 
+            WHEN completed_hours >= required_hours THEN 1 
+            ELSE 0 
           END
         ) AS completed
       FROM (
         SELECT 
           s.student_id,
           s.ojt_hours_required AS required_hours,
+
           IFNULL(
             SUM(
-              TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)) / 3600
-            ), 0
+              (
+                IFNULL(TIME_TO_SEC(TIMEDIFF(a.morning_time_out, a.morning_time_in)),0) +
+                IFNULL(TIME_TO_SEC(TIMEDIFF(a.afternoon_time_out, a.afternoon_time_in)),0) +
+                IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)),0)
+              ) / 3600
+            ),
+            0
           ) AS completed_hours
+
         FROM students s
-        LEFT JOIN attendance a 
-          ON s.student_id = a.student_id
-          AND a.time_out IS NOT NULL
+        LEFT JOIN attendance a ON s.student_id = a.student_id
         GROUP BY s.student_id, s.ojt_hours_required
       ) t
     `);

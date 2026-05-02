@@ -233,10 +233,10 @@ class StudentModel {
   // =========================
   // STUDENT PROGRESS (coordinator)
   // =========================
-  static async getStudentProgress(student_id) {
+ static async getStudentProgress(student_id) {
 
-    // Student basic info
-    const [[student]] = await db.query(`
+  // Student basic info
+  const [[student]] = await db.query(`
     SELECT 
       s.student_id,
       s.ojt_hours_required,
@@ -251,43 +251,63 @@ class StudentModel {
     WHERE s.student_id = ?
   `, [student_id]);
 
-    // Attendance summary
-    const [[summary]] = await db.query(`
-  SELECT
-    COUNT(DISTINCT attendance_date) AS attendanceRecords,
-    COUNT(DISTINCT attendance_date) AS attendanceDays,
-    MAX(attendance_date) AS lastAttendance,
-    IFNULL(
-      SUM(TIME_TO_SEC(TIMEDIFF(time_out, time_in)) / 3600),
-      0
-    ) AS hoursCompleted
-  FROM attendance
-  WHERE student_id = ?
-  AND time_out IS NOT NULL
-`, [student_id]);
+  // Attendance summary (UPDATED)
+  const [[summary]] = await db.query(`
+    SELECT
+      COUNT(DISTINCT attendance_date) AS attendanceRecords,
+      COUNT(DISTINCT attendance_date) AS attendanceDays,
+      MAX(attendance_date) AS lastAttendance,
 
-    // Recent attendance (last 5)
-    const [recentAttendance] = await db.query(`
-  SELECT
-    attendance_date AS date,
-    TIME(time_in) AS time_in,
-    TIME(time_out) AS time_out,
-    TIME_TO_SEC(TIMEDIFF(time_out, time_in)) / 3600 AS hours
-  FROM attendance
-  WHERE student_id = ?
-  ORDER BY attendance_date DESC
-  LIMIT 5
-`, [student_id]);
+      IFNULL(
+        SUM(
+          (
+            IFNULL(TIME_TO_SEC(TIMEDIFF(morning_time_out, morning_time_in)),0) +
+            IFNULL(TIME_TO_SEC(TIMEDIFF(afternoon_time_out, afternoon_time_in)),0) +
+            IFNULL(TIME_TO_SEC(TIMEDIFF(ot_time_out, ot_time_in)),0)
+          ) / 3600
+        ),
+        0
+      ) AS hoursCompleted
 
-    return {
-      student,
-      attendanceDays: summary.attendanceDays,
-      attendanceRecords: summary.attendanceRecords,
-      lastAttendance: summary.lastAttendance,
-      hoursCompleted: summary.hoursCompleted,
-      recentAttendance
-    };
-  }
+    FROM attendance
+    WHERE student_id = ?
+  `, [student_id]);
+
+  // Recent attendance (UPDATED)
+  const [recentAttendance] = await db.query(`
+    SELECT
+      attendance_date AS date,
+      morning_time_in,
+      morning_time_out,
+      afternoon_time_in,
+      afternoon_time_out,
+      ot_time_in,
+      ot_time_out,
+
+      ROUND(
+        (
+          IFNULL(TIME_TO_SEC(TIMEDIFF(morning_time_out, morning_time_in)),0) +
+          IFNULL(TIME_TO_SEC(TIMEDIFF(afternoon_time_out, afternoon_time_in)),0) +
+          IFNULL(TIME_TO_SEC(TIMEDIFF(ot_time_out, ot_time_in)),0)
+        ) / 3600,
+        2
+      ) AS hours
+
+    FROM attendance
+    WHERE student_id = ?
+    ORDER BY attendance_date DESC
+    LIMIT 5
+  `, [student_id]);
+
+  return {
+    student,
+    attendanceDays: summary.attendanceDays || 0,
+    attendanceRecords: summary.attendanceRecords || 0,
+    lastAttendance: summary.lastAttendance,
+    hoursCompleted: summary.hoursCompleted || 0,
+    recentAttendance
+  };
+}
 }
 
 module.exports = StudentModel;

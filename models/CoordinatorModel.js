@@ -168,36 +168,36 @@ class CoordinatorModel {
   // DASHBOARD STATS (coordinator)
   // =========================
   static async getDashboardStats(coordinatorUserId) {
-  // =========================
-  // GET COORDINATOR DEPARTMENT
-  // =========================
-  const [[coord]] = await db.query(`
+    // =========================
+    // GET COORDINATOR DEPARTMENT
+    // =========================
+    const [[coord]] = await db.query(`
     SELECT department_id
     FROM coordinators
     WHERE user_id = ?
   `, [coordinatorUserId]);
 
-  if (!coord) return null;
+    if (!coord) return null;
 
-  const deptId = coord.department_id;
+    const deptId = coord.department_id;
 
-  // =========================
-  // BASIC COUNTS
-  // =========================
-  const [[students]] = await db.query(`
+    // =========================
+    // BASIC COUNTS
+    // =========================
+    const [[students]] = await db.query(`
     SELECT COUNT(*) AS totalStudents
     FROM students
     WHERE department_id = ?
   `, [deptId]);
 
-  const [[ongoing]] = await db.query(`
+    const [[ongoing]] = await db.query(`
     SELECT COUNT(*) AS ongoing
     FROM students
     WHERE department_id = ?
     AND company_id IS NOT NULL
   `, [deptId]);
 
-  const [[submittedLogs]] = await db.query(`
+    const [[submittedLogs]] = await db.query(`
     SELECT COUNT(*) AS submittedLogs
     FROM daily_logs dl
     JOIN students s ON s.student_id = dl.student_id
@@ -205,7 +205,7 @@ class CoordinatorModel {
     AND dl.status = 'submitted'
   `, [deptId]);
 
-  const [[submittedNarratives]] = await db.query(`
+    const [[submittedNarratives]] = await db.query(`
     SELECT COUNT(*) AS submittedNarratives
     FROM narrative_reports n
     JOIN students s ON s.student_id = n.student_id
@@ -213,19 +213,23 @@ class CoordinatorModel {
     AND n.status = 'submitted'
   `, [deptId]);
 
-  // =========================
-  // FIXED HOURS CALCULATION
-  // =========================
-  const [[hoursData]] = await db.query(`
+    // =========================
+    // FIXED HOURS CALCULATION
+    // =========================
+    const [[hoursData]] = await db.query(`
     SELECT 
       COALESCE((
-        SELECT ROUND(AVG(TIMESTAMPDIFF(MINUTE, a.time_in, a.time_out) / 60))
+        SELECT ROUND(AVG(
+          (
+            IFNULL(TIME_TO_SEC(TIMEDIFF(a.morning_time_out, a.morning_time_in)), 0) +
+            IFNULL(TIME_TO_SEC(TIMEDIFF(a.afternoon_time_out, a.afternoon_time_in)), 0) +
+            IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
+          ) / 3600
+        ))
         FROM attendance a
         JOIN students s2 ON s2.student_id = a.student_id
         WHERE s2.department_id = ?
-        AND a.time_in IS NOT NULL
-        AND a.time_out IS NOT NULL
-      ), 0) AS avgHoursLogged,
+      ), 0) AS avgHoursLogged
 
       COALESCE((
         SELECT ROUND(AVG(NULLIF(c.required_hours, 0)))
@@ -235,10 +239,10 @@ class CoordinatorModel {
       ), 0) AS requiredHours
   `, [deptId, deptId]);
 
-  // =========================
-  // FLAGGED ATTENDANCE
-  // =========================
-  const [[flaggedAttendance]] = await db.query(`
+    // =========================
+    // FLAGGED ATTENDANCE
+    // =========================
+    const [[flaggedAttendance]] = await db.query(`
     SELECT COUNT(*) AS flaggedAttendance
     FROM attendance a
     JOIN students s ON s.student_id = a.student_id
@@ -246,10 +250,10 @@ class CoordinatorModel {
     AND a.location_status = 'flagged'
   `, [deptId]);
 
-  // =========================
-  // RECENT ACTIVITY
-  // =========================
-  const [recentActivity] = await db.query(`
+    // =========================
+    // RECENT ACTIVITY
+    // =========================
+    const [recentActivity] = await db.query(`
     (
       SELECT 
         u.f_name,
@@ -279,22 +283,22 @@ class CoordinatorModel {
     LIMIT 3
   `, [deptId, deptId]);
 
-  // =========================
-  // FINAL RETURN
-  // =========================
-  return {
-    totalStudents: students.totalStudents || 0,
-    ongoing: ongoing.ongoing || 0,
-    submittedLogs: submittedLogs.submittedLogs || 0,
-    submittedNarratives: submittedNarratives.submittedNarratives || 0,
-    flaggedAttendance: flaggedAttendance.flaggedAttendance || 0,
+    // =========================
+    // FINAL RETURN
+    // =========================
+    return {
+      totalStudents: students.totalStudents || 0,
+      ongoing: ongoing.ongoing || 0,
+      submittedLogs: submittedLogs.submittedLogs || 0,
+      submittedNarratives: submittedNarratives.submittedNarratives || 0,
+      flaggedAttendance: flaggedAttendance.flaggedAttendance || 0,
 
-    avgHoursLogged: hoursData.avgHoursLogged || 0,
-    requiredHours: hoursData.requiredHours || 0,
+      avgHoursLogged: hoursData.avgHoursLogged || 0,
+      requiredHours: hoursData.requiredHours || 0,
 
-    recentActivity: recentActivity || []
-  };
-}
+      recentActivity: recentActivity || []
+    };
+  }
 
   // =========================
   // COORDINATOR STUDENTS
@@ -329,9 +333,15 @@ class CoordinatorModel {
   COALESCE(s.ojt_hours_required, cr.required_hours) AS required_hours,
 
   COALESCE(
-    ROUND(SUM(TIMESTAMPDIFF(MINUTE, a.time_in, a.time_out)) / 60),
+  ROUND(SUM(
+      (
+        IFNULL(TIME_TO_SEC(TIMEDIFF(a.morning_time_out, a.morning_time_in)), 0) +
+        IFNULL(TIME_TO_SEC(TIMEDIFF(a.afternoon_time_out, a.afternoon_time_in)), 0) +
+        IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
+      ) / 3600
+    )),
     0
-  ) AS hours_completed,
+  ) AS hours_completed
 
   s.company_id,
   comp.company_name AS company,
@@ -393,29 +403,34 @@ ORDER BY u.l_name ASC
 
     // attendance stats
     const [[stats]] = await db.query(`
-    SELECT
+   SELECT
       COUNT(*) AS attendance_records,
       COUNT(DISTINCT attendance_date) AS attendance_days,
-      ROUND(
-        SUM(TIMESTAMPDIFF(MINUTE, time_in, time_out)) / 60
-      ) AS hours_completed,
+      ROUND(SUM(
+        (
+          IFNULL(TIME_TO_SEC(TIMEDIFF(morning_time_out, morning_time_in)), 0) +
+          IFNULL(TIME_TO_SEC(TIMEDIFF(afternoon_time_out, afternoon_time_in)), 0) +
+          IFNULL(TIME_TO_SEC(TIMEDIFF(ot_time_out, ot_time_in)), 0)
+        ) / 3600
+      )) AS hours_completed,
       MAX(attendance_date) AS last_attendance_date
     FROM attendance
     WHERE student_id = ?
-      AND time_out IS NOT NULL
   `, [studentId]);
 
     // recent attendance (last 5)
     const [recent] = await db.query(`
     SELECT
       attendance_date AS date,
-      TIME(time_in) AS time_in,
-      TIME(time_out) AS time_out,
-      ROUND(TIMESTAMPDIFF(MINUTE, time_in, time_out) / 60) AS hours
+      morning_time_in,
+      morning_time_out,
+      afternoon_time_in,
+      afternoon_time_out,
+      ot_time_in,
+      ot_time_out
     FROM attendance
     WHERE student_id = ?
-      AND time_out IS NOT NULL
-    ORDER BY time_in DESC
+    ORDER BY attendance_date DESC
     LIMIT 5
   `, [studentId]);
 

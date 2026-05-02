@@ -3,8 +3,6 @@ const { sendNotification } = require("../services/notificationServices");
 
 function getPHTime() {
   const now = new Date();
-
-  // Add 8 hours manually
   now.setHours(now.getHours() + 8);
 
   const hours = String(now.getHours()).padStart(2, "0");
@@ -24,21 +22,26 @@ class AttendanceModel {
       SELECT 
         attendance_id,
         student_id,
-        time_in,
-        time_out,
+        attendance_date,
+        morning_time_in,
+        morning_time_out,
+        afternoon_time_in,
+        afternoon_time_out,
+        ot_time_in,
+        ot_time_out,
         latitude,
         longitude,
         created_at
       FROM attendance
       WHERE student_id = ?
-      ORDER BY time_in DESC
+      ORDER BY attendance_date DESC
     `, [student_id]);
 
     return rows;
   }
 
   // =========================
-  // BY DEPARTMENT (coordinator)
+  // BY DEPARTMENT
   // =========================
   static async getByDepartment(department_id) {
 
@@ -46,9 +49,13 @@ class AttendanceModel {
       SELECT
         a.attendance_id,
         a.student_id,
-        a.time_in,
-        NULLIF(a.time_out, '00:00:00') AS time_out,
         a.attendance_date,
+        a.morning_time_in,
+        a.morning_time_out,
+        a.afternoon_time_in,
+        a.afternoon_time_out,
+        a.ot_time_in,
+        a.ot_time_out,
         a.latitude,
         a.longitude,
         a.location_status,
@@ -71,31 +78,24 @@ class AttendanceModel {
   }
 
   // =========================
-  // CREATE TIME IN (GPS VERIFIED)
+  // SMART TIME IN
   // =========================
   static async timeIn({ student_id, latitude, longitude }) {
 
-    const [existing] = await db.query(
-      `SELECT attendance_id
-       FROM attendance
-       WHERE student_id = ?
-       AND attendance_date = CURDATE()`,
-      [student_id]
-    );
+    const now = getPHTime();
 
-    if (existing.length > 0) {
-      return existing[0].attendance_id;
-    }
+    const [[today]] = await db.query(`
+      SELECT * FROM attendance
+      WHERE student_id = ?
+      AND attendance_date = CURDATE()
+    `, [student_id]);
 
+    // LOCATION CHECK (unchanged)
     let location_status = "flagged";
 
     if (latitude && longitude) {
-
       const [[location]] = await db.query(`
-        SELECT 
-          l.latitude,
-          l.longitude,
-          l.radius_meters
+        SELECT latitude, longitude, radius_meters
         FROM students s
         JOIN ojt_locations l ON s.company_id = l.company_id
         WHERE s.student_id = ?
@@ -103,7 +103,6 @@ class AttendanceModel {
       `, [student_id]);
 
       if (location) {
-
         const [[distanceResult]] = await db.query(`
           SELECT (
             6371000 * ACOS(
@@ -123,49 +122,122 @@ class AttendanceModel {
           location.latitude
         ]);
 
-        const distance = distanceResult.distance || 999999;
-
-        if (distance <= location.radius_meters) {
+        if ((distanceResult.distance || 999999) <= location.radius_meters) {
           location_status = "verified";
-        } else {
-          location_status = "flagged";
         }
       }
     }
 
-    const now = getPHTime();
-    console.log("SERVER TIME RAW:", new Date().toString());
-    console.log("PH TIME:", getPHTime());
+    // CREATE NEW RECORD → MORNING IN
+    if (!today) {
+      const [result] = await db.query(`
+        INSERT INTO attendance
+        (student_id, attendance_date, morning_time_in, latitude, longitude, location_status)
+        VALUES (?, CURDATE(), ?, ?, ?, ?)
+      `, [student_id, now, latitude ?? null, longitude ?? null, location_status]);
 
-    const [result] = await db.query(`
-      INSERT INTO attendance
-      (student_id, attendance_date, time_in, latitude, longitude, location_status)
-      VALUES (?, CURDATE(), ?, ?, ?, ?)
-    `, [student_id, now, latitude ?? null, longitude ?? null, location_status]);
+      return result.insertId;
+    }
 
-    return result.insertId;
+    // BLOCK duplicate morning in
+    if (today.morning_time_in && !today.morning_time_out) {
+      throw new Error("Already timed in (morning)");
+    }
+
+    // AFTERNOON IN
+    if (!today.afternoon_time_in) {
+      await db.query(`
+        UPDATE attendance
+        SET afternoon_time_in = ?
+        WHERE attendance_id = ?
+      `, [now, today.attendance_id]);
+      return;
+    }
+
+    // OT IN
+    if (!today.ot_time_in) {
+      await db.query(`
+        UPDATE attendance
+        SET ot_time_in = ?
+        WHERE attendance_id = ?
+      `, [now, today.attendance_id]);
+    }
   }
 
   // =========================
-  // TIME OUT
+  // SMART TIME OUT
   // =========================
   static async timeOutByStudent(student_id) {
 
     const now = getPHTime();
 
-    await db.query(`
-      UPDATE attendance
-      SET time_out = ?
+    const [[today]] = await db.query(`
+      SELECT * FROM attendance
       WHERE student_id = ?
-        AND attendance_date = CURDATE()
-        AND time_out IS NULL
-    `, [now, student_id]);
+      AND attendance_date = CURDATE()
+    `, [student_id]);
+
+    if (!today) throw new Error("No time-in found");
+
+    // MORNING OUT
+    if (today.morning_time_in && !today.morning_time_out) {
+      await db.query(`
+        UPDATE attendance
+        SET morning_time_out = ?
+        WHERE attendance_id = ?
+      `, [now, today.attendance_id]);
+      return;
+    }
+
+    // AFTERNOON OUT (AUTO 1PM IF MISSING)
+    if (!today.afternoon_time_out) {
+      await db.query(`
+        UPDATE attendance
+        SET 
+          afternoon_time_in = COALESCE(afternoon_time_in, '13:00:00'),
+          afternoon_time_out = ?
+        WHERE attendance_id = ?
+      `, [now, today.attendance_id]);
+      return;
+    }
+
+    // OT OUT
+    if (today.ot_time_in && !today.ot_time_out) {
+      await db.query(`
+        UPDATE attendance
+        SET ot_time_out = ?
+        WHERE attendance_id = ?
+      `, [now, today.attendance_id]);
+    }
 
     await this.checkCompletionAndNotify(student_id);
   }
 
   // =========================
-  // OJT COMPLETION CHECK
+  // HOURS COMPUTATION
+  // =========================
+  static async getHoursByStudent(student_id) {
+
+    const [[row]] = await db.query(`
+      SELECT IFNULL(
+        SUM(
+          (
+            IFNULL(TIME_TO_SEC(TIMEDIFF(morning_time_out, morning_time_in)), 0) +
+            IFNULL(TIME_TO_SEC(TIMEDIFF(afternoon_time_out, afternoon_time_in)), 0) +
+            IFNULL(TIME_TO_SEC(TIMEDIFF(ot_time_out, ot_time_in)), 0)
+          ) / 3600
+        ),
+        0
+      ) AS hours
+      FROM attendance
+      WHERE student_id = ?
+    `, [student_id]);
+
+    return row.hours;
+  }
+
+  // =========================
+  // COMPLETION CHECK
   // =========================
   static async checkCompletionAndNotify(student_id) {
 
@@ -174,13 +246,17 @@ class AttendanceModel {
         s.user_id,
         s.ojt_hours_required AS required_hours,
         IFNULL(
-          SUM(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)) / 3600),
+          SUM(
+            (
+              IFNULL(TIME_TO_SEC(TIMEDIFF(a.morning_time_out, a.morning_time_in)), 0) +
+              IFNULL(TIME_TO_SEC(TIMEDIFF(a.afternoon_time_out, a.afternoon_time_in)), 0) +
+              IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
+            ) / 3600
+          ),
           0
         ) AS completed_hours
       FROM students s
-      LEFT JOIN attendance a 
-        ON s.student_id = a.student_id
-        AND a.time_out IS NOT NULL
+      LEFT JOIN attendance a ON s.student_id = a.student_id
       WHERE s.student_id = ?
       GROUP BY s.user_id, s.ojt_hours_required
     `, [student_id]);
@@ -192,7 +268,7 @@ class AttendanceModel {
       SELECT notif_id
       FROM notifications
       WHERE user_id = ?
-        AND title = 'OJT Completed'
+      AND title = 'OJT Completed'
       LIMIT 1
     `, [row.user_id]);
 
@@ -206,25 +282,7 @@ class AttendanceModel {
   }
 
   // =========================
-  // HOURS COMPLETED
-  // =========================
-  static async getHoursByStudent(student_id) {
-
-    const [[row]] = await db.query(`
-      SELECT IFNULL(
-        SUM(TIME_TO_SEC(TIMEDIFF(time_out, time_in)) / 3600),
-        0
-      ) AS hours
-      FROM attendance
-      WHERE student_id = ?
-      AND time_out IS NOT NULL
-    `, [student_id]);
-
-    return row.hours;
-  }
-
-  // =========================
-  // TODAY ATTENDANCE
+  // TODAY
   // =========================
   static async getToday(student_id) {
 
@@ -232,12 +290,15 @@ class AttendanceModel {
       SELECT 
         attendance_id,
         attendance_date,
-        TIME(time_in) AS time_in,
-        TIME(time_out) AS time_out
+        morning_time_in,
+        morning_time_out,
+        afternoon_time_in,
+        afternoon_time_out,
+        ot_time_in,
+        ot_time_out
       FROM attendance
       WHERE student_id = ?
       AND attendance_date = CURDATE()
-      ORDER BY attendance_id DESC
       LIMIT 1
     `, [student_id]);
 
@@ -245,7 +306,7 @@ class AttendanceModel {
   }
 
   // =========================
-  // STUDENT ATTENDANCE HISTORY
+  // HISTORY
   // =========================
   static async getStudentHistory(student_id) {
 
@@ -253,18 +314,22 @@ class AttendanceModel {
       SELECT 
         attendance_id,
         attendance_date,
-        TIME(time_in) AS time_in,
-        TIME(time_out) AS time_out
+        morning_time_in,
+        morning_time_out,
+        afternoon_time_in,
+        afternoon_time_out,
+        ot_time_in,
+        ot_time_out
       FROM attendance
       WHERE student_id = ?
-      ORDER BY attendance_date DESC, time_in DESC
+      ORDER BY attendance_date DESC
     `, [student_id]);
 
     return rows;
   }
 
   // =========================
-  // UPDATE LOCATION STATUS (coordinator)
+  // UPDATE LOCATION STATUS
   // =========================
   static async updateLocationStatus(attendance_id, location_status) {
 

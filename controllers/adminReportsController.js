@@ -1,7 +1,7 @@
 const db = require("../config/db");
 
 // ===============================
-// HOURS SUMMARY
+// HOURS SUMMARY (UNCHANGED LOGIC)
 // ===============================
 exports.getHoursSummary = async (req, res) => {
   try {
@@ -30,7 +30,7 @@ exports.getHoursSummary = async (req, res) => {
 };
 
 // ===============================
-// ATTENDANCE SUMMARY
+// ATTENDANCE SUMMARY (FIXED)
 // ===============================
 exports.getAttendanceSummary = async (req, res) => {
   try {
@@ -41,12 +41,27 @@ exports.getAttendanceSummary = async (req, res) => {
         c.course_name AS course,
         comp.company_name AS company,
         s.ojt_hours_required AS required,
-        IFNULL(SUM(TIMESTAMPDIFF(HOUR,a.time_in,a.time_out)),0) AS rendered
+
+        ROUND(
+          IFNULL(
+            SUM(
+              (
+                IFNULL(TIME_TO_SEC(TIMEDIFF(a.morning_time_out, a.morning_time_in)),0) +
+                IFNULL(TIME_TO_SEC(TIMEDIFF(a.afternoon_time_out, a.afternoon_time_in)),0) +
+                IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)),0)
+              ) / 3600
+            ),
+            0
+          ),
+          2
+        ) AS rendered
+
       FROM students s
       LEFT JOIN users u ON s.user_id = u.user_id
       LEFT JOIN courses c ON s.course_id = c.course_id
       LEFT JOIN companies comp ON s.company_id = comp.company_id
       LEFT JOIN attendance a ON s.student_id = a.student_id
+
       GROUP BY s.student_id
       ORDER BY student
     `);
@@ -59,7 +74,7 @@ exports.getAttendanceSummary = async (req, res) => {
 };
 
 // ===============================
-// DEPLOYMENT SUMMARY
+// DEPLOYMENT SUMMARY (UNCHANGED)
 // ===============================
 exports.getDeploymentSummary = async (req, res) => {
   try {
@@ -87,7 +102,7 @@ exports.getDeploymentSummary = async (req, res) => {
 };
 
 // ===============================
-// DEPARTMENT OVERVIEW
+// COMPANY SUMMARY (UNCHANGED)
 // ===============================
 exports.getCompanySummary = async (req, res) => {
   try {
