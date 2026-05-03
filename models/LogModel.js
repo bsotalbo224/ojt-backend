@@ -113,22 +113,22 @@ class LogModel {
   static async getByDepartment(department_id) {
 
   const query = `
-    SELECT 
-      l.*,
+   SELECT 
+  l.*,
 
-      u.f_name,
-      u.l_name,
-      s.student_id,
+  CONCAT(u.f_name,' ',u.l_name) AS student_name,
+  u.photo,
 
-      cr.course_code AS course,
-      s.photo,                    
+  cr.course_code AS course,
 
-      a.morning_time_in,
-      a.morning_time_out,
-      a.afternoon_time_in,
-      a.afternoon_time_out,
-      a.ot_time_in,
-      a.ot_time_out,
+  s.student_id,
+
+  a.morning_time_in,
+  a.morning_time_out,
+  a.afternoon_time_in,
+  a.afternoon_time_out,
+  a.ot_time_in,
+  a.ot_time_out,
 
       ROUND(
         (
