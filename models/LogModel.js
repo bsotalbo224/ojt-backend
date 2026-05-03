@@ -109,6 +109,7 @@ class LogModel {
 
     return log || null;
   }
+
   static async getByDepartment(department_id) {
 
   const query = `
@@ -118,6 +119,9 @@ class LogModel {
       u.f_name,
       u.l_name,
       s.student_id,
+
+      cr.course_code AS course,
+      s.photo,                    
 
       a.morning_time_in,
       a.morning_time_out,
@@ -145,14 +149,13 @@ class LogModel {
     JOIN students s ON s.student_id = l.student_id
     JOIN users u ON u.user_id = s.user_id
 
+    LEFT JOIN courses cr ON cr.course_id = s.course_id
+
     LEFT JOIN attendance a
       ON l.student_id = a.student_id
       AND l.log_date = a.attendance_date
   `;
 
-  const params = [];
-
-  // If department_id is provided → filter
   if (department_id !== null) {
     const [rows] = await db.query(
       query + " WHERE s.department_id = ? ORDER BY l.log_date DESC",
@@ -161,7 +164,6 @@ class LogModel {
     return rows;
   }
 
-  // Admin (no filter)
   const [rows] = await db.query(
     query + " ORDER BY l.log_date DESC"
   );
