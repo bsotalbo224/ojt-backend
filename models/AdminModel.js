@@ -24,15 +24,19 @@ class AdminModel {
     const [rows] = await db.query(`
       SELECT
         s.student_id,
-        u.f_name,
-        u.l_name,
-        u.photo,
-        c.course_code,
-        c.course_name,
-        comp.company_name,
-        CONCAT(cu.f_name, ' ', cu.l_name) AS coordinator,
 
-        COALESCE(s.ojt_hours_required, c.required_hours) AS totalHours,
+        MAX(u.f_name) AS f_name,
+        MAX(u.l_name) AS l_name,
+        MAX(u.photo) AS photo,
+
+        MAX(c.course_code) AS course_code,
+        MAX(c.course_name) AS course_name,
+
+        MAX(comp.company_name) AS company_name,
+
+        MAX(CONCAT(cu.f_name, ' ', cu.l_name)) AS coordinator,
+
+        MAX(COALESCE(s.ojt_hours_required, c.required_hours)) AS totalHours,
 
         IFNULL(
           SUM(
@@ -54,7 +58,7 @@ class AdminModel {
       LEFT JOIN attendance a ON s.student_id = a.student_id
 
       GROUP BY s.student_id
-      ORDER BY u.l_name ASC
+      ORDER BY MAX(u.l_name) ASC
       LIMIT 4
     `);
 
