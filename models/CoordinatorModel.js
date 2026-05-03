@@ -230,9 +230,9 @@ class CoordinatorModel {
     JOIN students s2 ON s2.student_id = a.student_id
     WHERE s2.department_id = ?
     AND (
-      a.morning_time_out IS NOT NULL OR
-      a.afternoon_time_out IS NOT NULL OR
-      a.ot_time_out IS NOT NULL
+       (a.morning_time_in IS NOT NULL AND a.morning_time_out IS NOT NULL) OR
+       (a.afternoon_time_in IS NOT NULL AND a.afternoon_time_out IS NOT NULL) OR
+       (a.ot_time_in IS NOT NULL AND a.ot_time_out IS NOT NULL)
     )
   ), 0) AS avgHoursLogged,
 
