@@ -109,6 +109,65 @@ class LogModel {
 
     return log || null;
   }
+  static async getByDepartment(department_id) {
+
+  const query = `
+    SELECT 
+      l.*,
+
+      u.f_name,
+      u.l_name,
+      s.student_id,
+
+      a.morning_time_in,
+      a.morning_time_out,
+      a.afternoon_time_in,
+      a.afternoon_time_out,
+      a.ot_time_in,
+      a.ot_time_out,
+
+      ROUND(
+        (
+          IFNULL(TIME_TO_SEC(TIMEDIFF(a.morning_time_out, a.morning_time_in)),0) +
+          IFNULL(TIME_TO_SEC(TIMEDIFF(a.afternoon_time_out, a.afternoon_time_in)),0) +
+          IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)),0)
+        ) / 3600,
+        2
+      ) AS total_hours,
+
+      (
+        SELECT COUNT(*)
+        FROM attachments att
+        WHERE att.log_id = l.log_id
+      ) AS attachment_count
+
+    FROM daily_logs l
+    JOIN students s ON s.student_id = l.student_id
+    JOIN users u ON u.user_id = s.user_id
+
+    LEFT JOIN attendance a
+      ON l.student_id = a.student_id
+      AND l.log_date = a.attendance_date
+  `;
+
+  const params = [];
+
+  // If department_id is provided → filter
+  if (department_id !== null) {
+    const [rows] = await db.query(
+      query + " WHERE s.department_id = ? ORDER BY l.log_date DESC",
+      [department_id]
+    );
+    return rows;
+  }
+
+  // Admin (no filter)
+  const [rows] = await db.query(
+    query + " ORDER BY l.log_date DESC"
+  );
+
+  return rows;
+}
 
 }
 
