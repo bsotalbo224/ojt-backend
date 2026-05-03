@@ -217,27 +217,32 @@ class CoordinatorModel {
     // FIXED HOURS CALCULATION
     // =========================
     const [[hoursData]] = await db.query(`
-    SELECT 
-      COALESCE((
-        SELECT ROUND(AVG(
-          (
-            IFNULL(TIME_TO_SEC(TIMEDIFF(a.morning_time_out, a.morning_time_in)), 0) +
-            IFNULL(TIME_TO_SEC(TIMEDIFF(a.afternoon_time_out, a.afternoon_time_in)), 0) +
-            IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
-          ) / 3600
-        ))
-        FROM attendance a
-        JOIN students s2 ON s2.student_id = a.student_id
-        WHERE s2.department_id = ?
-      ), 0) AS avgHoursLogged
+  SELECT 
+  COALESCE((
+    SELECT ROUND(AVG(
+      (
+        IFNULL(TIME_TO_SEC(TIMEDIFF(a.morning_time_out, a.morning_time_in)), 0) +
+        IFNULL(TIME_TO_SEC(TIMEDIFF(a.afternoon_time_out, a.afternoon_time_in)), 0) +
+        IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
+      ) / 3600
+    ))
+    FROM attendance a
+    JOIN students s2 ON s2.student_id = a.student_id
+    WHERE s2.department_id = ?
+    AND (
+      a.morning_time_out IS NOT NULL OR
+      a.afternoon_time_out IS NOT NULL OR
+      a.ot_time_out IS NOT NULL
+    )
+  ), 0) AS avgHoursLogged,
 
-      COALESCE((
-        SELECT ROUND(AVG(NULLIF(c.required_hours, 0)))
-        FROM students s3
-        JOIN courses c ON c.course_id = s3.course_id
-        WHERE s3.department_id = ?
-      ), 0) AS requiredHours
-  `, [deptId, deptId]);
+    COALESCE((
+      SELECT ROUND(AVG(NULLIF(c.required_hours, 0)))
+      FROM students s3
+      JOIN courses c ON c.course_id = s3.course_id
+      WHERE s3.department_id = ?
+    ), 0) AS requiredHours
+`, [deptId, deptId]);
 
     // =========================
     // FLAGGED ATTENDANCE
@@ -317,61 +322,64 @@ class CoordinatorModel {
 
     const [rows] = await db.query(`
   SELECT 
-  s.student_id,
-  s.user_id,
+    s.student_id,
+    s.user_id,
 
-  u.f_name,
-  u.l_name,
-  u.email,
-  u.photo,
+    u.f_name,
+    u.l_name,
+    u.email,
+    u.photo,
 
-  s.course_id,
-  cr.course_code AS course,
+    s.course_id,
+    cr.course_code AS course,
 
-  s.ojt_hours_required,
+    s.ojt_hours_required,
+    COALESCE(s.ojt_hours_required, cr.required_hours) AS required_hours,
 
-  COALESCE(s.ojt_hours_required, cr.required_hours) AS required_hours,
+    COALESCE(a.hours_completed, 0) AS hours_completed,
 
-  COALESCE(
-  ROUND(SUM(
-      (
-        IFNULL(TIME_TO_SEC(TIMEDIFF(a.morning_time_out, a.morning_time_in)), 0) +
-        IFNULL(TIME_TO_SEC(TIMEDIFF(a.afternoon_time_out, a.afternoon_time_in)), 0) +
-        IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
-      ) / 3600
-    )),
-    0
-  ) AS hours_completed
+    s.company_id,
+    comp.company_name AS company,
 
-  s.company_id,
-  comp.company_name AS company,
+    (
+      SELECT COUNT(*) 
+      FROM daily_logs dl2
+      WHERE dl2.student_id = s.student_id 
+      AND dl2.status = 'submitted'
+    ) AS submitted_logs,
 
-  (
-    SELECT COUNT(*) 
-    FROM daily_logs dl2
-    WHERE dl2.student_id = s.student_id 
-    AND dl2.status = 'submitted'
-  ) AS submitted_logs,
+    (
+      SELECT COUNT(*) 
+      FROM narrative_reports nr
+      WHERE nr.student_id = s.student_id 
+      AND nr.status = 'submitted'
+    ) AS submitted_narratives
 
-  (
-    SELECT COUNT(*) 
-    FROM narrative_reports nr
-    WHERE nr.student_id = s.student_id 
-    AND nr.status = 'submitted'
-  ) AS submitted_narratives
+  FROM students s
+  JOIN users u ON u.user_id = s.user_id
+  LEFT JOIN companies comp ON comp.company_id = s.company_id
+  LEFT JOIN courses cr ON cr.course_id = s.course_id
 
-FROM students s
-JOIN users u ON u.user_id = s.user_id
-LEFT JOIN companies comp ON comp.company_id = s.company_id
-LEFT JOIN courses cr ON cr.course_id = s.course_id
-LEFT JOIN attendance a 
-  ON a.student_id = s.student_id
-  AND a.time_in IS NOT NULL
-  AND a.time_out IS NOT NULL
+  LEFT JOIN (
+    SELECT 
+      student_id,
+      ROUND(SUM(
+        (
+          IFNULL(TIME_TO_SEC(TIMEDIFF(morning_time_out, morning_time_in)), 0) +
+          IFNULL(TIME_TO_SEC(TIMEDIFF(afternoon_time_out, afternoon_time_in)), 0) +
+          IFNULL(TIME_TO_SEC(TIMEDIFF(ot_time_out, ot_time_in)), 0)
+        ) / 3600
+      )) AS hours_completed
+    FROM attendance
+      WHERE 
+        morning_time_in IS NOT NULL OR
+        afternoon_time_in IS NOT NULL OR
+        ot_time_in IS NOT NULL
+      GROUP BY student_id
+  ) a ON a.student_id = s.student_id
 
-WHERE s.department_id = ?
-GROUP BY s.student_id
-ORDER BY u.l_name ASC
+  WHERE s.department_id = ?
+  ORDER BY u.l_name ASC
 `, [deptId]);
 
     return rows;
