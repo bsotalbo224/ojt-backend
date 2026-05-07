@@ -6,6 +6,7 @@ class ProgressModel {
   // STUDENT HOURS + INFO
   // ─────────────────────────────────────────
   static async getStudentHours(student_id) {
+
     const [rows] = await db.query(`
       SELECT
         MAX(s.ojt_hours_required) AS required_hours,
@@ -23,9 +24,45 @@ class ProgressModel {
               CASE 
                 WHEN a.location_status = 'verified'
                 THEN (
-                  IFNULL(TIME_TO_SEC(TIMEDIFF(a.morning_time_out, a.morning_time_in)),0) +
-                  IFNULL(TIME_TO_SEC(TIMEDIFF(a.afternoon_time_out, a.afternoon_time_in)),0) +
-                  IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)),0)
+                  (
+                    IFNULL(
+                      TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
+                      0
+                    )
+
+                    - IF(
+                        a.lunch_break_start IS NOT NULL
+                        AND a.lunch_break_end IS NOT NULL,
+
+                        TIME_TO_SEC(
+                          TIMEDIFF(
+                            a.lunch_break_end,
+                            a.lunch_break_start
+                          )
+                        ),
+
+                        IF(
+                          IFNULL(
+                            TIME_TO_SEC(
+                              TIMEDIFF(a.time_out, a.time_in)
+                            ),
+                            0
+                          ) >= 18000,
+                          3600,
+                          0
+                        )
+                      )
+                  )
+
+                  + IFNULL(
+                      TIME_TO_SEC(
+                        TIMEDIFF(
+                          a.ot_time_out,
+                          a.ot_time_in
+                        )
+                      ),
+                      0
+                    )
                 )
                 ELSE 0
               END
@@ -36,17 +73,23 @@ class ProgressModel {
         ) AS completed_hours
 
       FROM students s
+
       LEFT JOIN users u ON u.user_id = s.user_id
       LEFT JOIN companies c ON c.company_id = s.company_id
       LEFT JOIN departments d ON d.department_id = s.department_id
       LEFT JOIN courses crs ON crs.course_id = s.course_id
-      LEFT JOIN coordinators co ON co.department_id = s.department_id
-      LEFT JOIN users cu ON cu.user_id = co.user_id
+
+      LEFT JOIN coordinators co 
+        ON co.department_id = s.department_id
+
+      LEFT JOIN users cu 
+        ON cu.user_id = co.user_id
 
       LEFT JOIN attendance a 
         ON a.student_id = s.student_id
 
       WHERE s.student_id = ?
+
       GROUP BY s.student_id
       LIMIT 1
     `, [student_id]);
@@ -58,6 +101,7 @@ class ProgressModel {
   // DAILY LOG STATS
   // ─────────────────────────────────────────
   static async getDailyLogStats(student_id) {
+
     const [rows] = await db.query(`
       SELECT
         COUNT(*) AS total,
@@ -80,6 +124,7 @@ class ProgressModel {
   // NARRATIVE STATS
   // ─────────────────────────────────────────
   static async getNarrativeStats(student_id) {
+
     const [rows] = await db.query(`
       SELECT
         COUNT(*) AS total,
@@ -113,9 +158,45 @@ class ProgressModel {
               CASE 
                 WHEN location_status = 'verified'
                 THEN (
-                  IFNULL(TIME_TO_SEC(TIMEDIFF(morning_time_out, morning_time_in)),0) +
-                  IFNULL(TIME_TO_SEC(TIMEDIFF(afternoon_time_out, afternoon_time_in)),0) +
-                  IFNULL(TIME_TO_SEC(TIMEDIFF(ot_time_out, ot_time_in)),0)
+                  (
+                    IFNULL(
+                      TIME_TO_SEC(TIMEDIFF(time_out, time_in)),
+                      0
+                    )
+
+                    - IF(
+                        lunch_break_start IS NOT NULL
+                        AND lunch_break_end IS NOT NULL,
+
+                        TIME_TO_SEC(
+                          TIMEDIFF(
+                            lunch_break_end,
+                            lunch_break_start
+                          )
+                        ),
+
+                        IF(
+                          IFNULL(
+                            TIME_TO_SEC(
+                              TIMEDIFF(time_out, time_in)
+                            ),
+                            0
+                          ) >= 18000,
+                          3600,
+                          0
+                        )
+                      )
+                  )
+
+                  + IFNULL(
+                      TIME_TO_SEC(
+                        TIMEDIFF(
+                          ot_time_out,
+                          ot_time_in
+                        )
+                      ),
+                      0
+                    )
                 )
                 ELSE 0
               END

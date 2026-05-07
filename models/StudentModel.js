@@ -230,10 +230,10 @@ class StudentModel {
     return rows;
   }
 
-  // =========================
-  // STUDENT PROGRESS (coordinator)
-  // =========================
- static async getStudentProgress(student_id) {
+ // =========================
+// STUDENT PROGRESS (coordinator)
+// =========================
+static async getStudentProgress(student_id) {
 
   // Student basic info
   const [[student]] = await db.query(`
@@ -251,19 +251,56 @@ class StudentModel {
     WHERE s.student_id = ?
   `, [student_id]);
 
-  // Attendance summary (UPDATED)
+  // Attendance summary
   const [[summary]] = await db.query(`
     SELECT
       COUNT(DISTINCT attendance_date) AS attendanceRecords,
       COUNT(DISTINCT attendance_date) AS attendanceDays,
+
       MAX(attendance_date) AS lastAttendance,
 
       IFNULL(
         SUM(
           (
-            IFNULL(TIME_TO_SEC(TIMEDIFF(morning_time_out, morning_time_in)),0) +
-            IFNULL(TIME_TO_SEC(TIMEDIFF(afternoon_time_out, afternoon_time_in)),0) +
-            IFNULL(TIME_TO_SEC(TIMEDIFF(ot_time_out, ot_time_in)),0)
+            (
+              IFNULL(
+                TIME_TO_SEC(TIMEDIFF(time_out, time_in)),
+                0
+              )
+
+              - IF(
+                  lunch_break_start IS NOT NULL
+                  AND lunch_break_end IS NOT NULL,
+
+                  TIME_TO_SEC(
+                    TIMEDIFF(
+                      lunch_break_end,
+                      lunch_break_start
+                    )
+                  ),
+
+                  IF(
+                    IFNULL(
+                      TIME_TO_SEC(
+                        TIMEDIFF(time_out, time_in)
+                      ),
+                      0
+                    ) >= 18000,
+                    3600,
+                    0
+                  )
+                )
+            )
+
+            + IFNULL(
+                TIME_TO_SEC(
+                  TIMEDIFF(
+                    ot_time_out,
+                    ot_time_in
+                  )
+                ),
+                0
+              )
           ) / 3600
         ),
         0
@@ -273,28 +310,68 @@ class StudentModel {
     WHERE student_id = ?
   `, [student_id]);
 
-  // Recent attendance (UPDATED)
+  // Recent attendance
   const [recentAttendance] = await db.query(`
     SELECT
       attendance_date AS date,
-      morning_time_in,
-      morning_time_out,
-      afternoon_time_in,
-      afternoon_time_out,
+
+      time_in,
+      lunch_break_start,
+      lunch_break_end,
+      time_out,
+
       ot_time_in,
       ot_time_out,
 
       ROUND(
         (
-          IFNULL(TIME_TO_SEC(TIMEDIFF(morning_time_out, morning_time_in)),0) +
-          IFNULL(TIME_TO_SEC(TIMEDIFF(afternoon_time_out, afternoon_time_in)),0) +
-          IFNULL(TIME_TO_SEC(TIMEDIFF(ot_time_out, ot_time_in)),0)
+          (
+            IFNULL(
+              TIME_TO_SEC(TIMEDIFF(time_out, time_in)),
+              0
+            )
+
+            - IF(
+                lunch_break_start IS NOT NULL
+                AND lunch_break_end IS NOT NULL,
+
+                TIME_TO_SEC(
+                  TIMEDIFF(
+                    lunch_break_end,
+                    lunch_break_start
+                  )
+                ),
+
+                IF(
+                  IFNULL(
+                    TIME_TO_SEC(
+                      TIMEDIFF(time_out, time_in)
+                    ),
+                    0
+                  ) >= 18000,
+                  3600,
+                  0
+                )
+              )
+          )
+
+          + IFNULL(
+              TIME_TO_SEC(
+                TIMEDIFF(
+                  ot_time_out,
+                  ot_time_in
+                )
+              ),
+              0
+            )
         ) / 3600,
         2
       ) AS hours
 
     FROM attendance
+
     WHERE student_id = ?
+
     ORDER BY attendance_date DESC
     LIMIT 5
   `, [student_id]);

@@ -39,15 +39,50 @@ class AdminModel {
         MAX(COALESCE(s.ojt_hours_required, c.required_hours)) AS totalHours,
 
         IFNULL(
-          SUM(
+        SUM(
+          (
+            -- Regular hours
             (
-              IFNULL(TIME_TO_SEC(TIMEDIFF(a.morning_time_out, a.morning_time_in)), 0) +
-              IFNULL(TIME_TO_SEC(TIMEDIFF(a.afternoon_time_out, a.afternoon_time_in)), 0) +
-              IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
-            ) / 3600
-          ),
-          0
-        ) AS hoursCompleted
+              IFNULL(
+              TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
+              0
+            )
+
+              -- subtract lunch duration if both exist
+              - IF(
+                  a.lunch_break_start IS NOT NULL
+                  AND a.lunch_break_end IS NOT NULL,
+
+                  TIME_TO_SEC(
+                    TIMEDIFF(
+                      a.lunch_break_end,
+                      a.lunch_break_start
+                    )
+                  ),
+
+                  -- fallback automatic lunch deduction
+                  IF(
+                    IFNULL(
+                    TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
+                    0
+                  ) >= 18000,
+                    3600,
+                    0
+                  )
+                )
+            )
+
+            -- Add OT
+            + IFNULL(
+                TIME_TO_SEC(
+                  TIMEDIFF(a.ot_time_out, a.ot_time_in)
+                ),
+                0
+              )
+          ) / 3600
+        ),
+        0
+      ) AS hoursCompleted
 
       FROM students s
       JOIN users u ON s.user_id = u.user_id
@@ -142,12 +177,19 @@ class AdminModel {
 
       await conn.query(`
         INSERT INTO students (
-          student_id, user_id, section,
-          ojt_hours_required, location_id,
-          company_id, is_active,
-          department_id, course_id
+          student_id,
+          user_id,
+          section,
+          ojt_hours_required,
+          location_id,
+          company_id,
+          is_active,
+          department_id,
+          course_id,
+          start_time,
+          end_time
         )
-        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
       `, [
         student.student_id,
         student.user_id,
@@ -156,7 +198,9 @@ class AdminModel {
         student.location_id,
         student.company_id,
         student.department_id,
-        student.course_id
+        student.course_id,
+        student.start_time,
+        student.end_time
       ]);
 
       await conn.query(`

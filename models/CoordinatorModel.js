@@ -218,23 +218,50 @@ class CoordinatorModel {
     // =========================
     const [[hoursData]] = await db.query(`
   SELECT 
-  COALESCE((
-    SELECT ROUND(AVG(
-      (
-        IFNULL(TIME_TO_SEC(TIMEDIFF(a.morning_time_out, a.morning_time_in)), 0) +
-        IFNULL(TIME_TO_SEC(TIMEDIFF(a.afternoon_time_out, a.afternoon_time_in)), 0) +
-        IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
-      ) / 3600
-    ))
-    FROM attendance a
-    JOIN students s2 ON s2.student_id = a.student_id
-    WHERE s2.department_id = ?
-    AND (
-       (a.morning_time_in IS NOT NULL AND a.morning_time_out IS NOT NULL) OR
-       (a.afternoon_time_in IS NOT NULL AND a.afternoon_time_out IS NOT NULL) OR
-       (a.ot_time_in IS NOT NULL AND a.ot_time_out IS NOT NULL)
-    )
-  ), 0) AS avgHoursLogged,
+    COALESCE((
+      SELECT ROUND(AVG(
+        (
+          (
+            IFNULL(
+              TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
+              0
+            )
+
+            - IF(
+                a.lunch_break_start IS NOT NULL
+                AND a.lunch_break_end IS NOT NULL,
+
+                TIME_TO_SEC(
+                  TIMEDIFF(
+                    a.lunch_break_end,
+                    a.lunch_break_start
+                  )
+                ),
+
+                IF(
+                  IFNULL(
+                    TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
+                    0
+                  ) >= 18000,
+                  3600,
+                  0
+                )
+              )
+          )
+
+          + IFNULL(
+              TIME_TO_SEC(
+                TIMEDIFF(a.ot_time_out, a.ot_time_in)
+              ),
+              0
+            )
+        ) / 3600
+      ))
+      FROM attendance a
+      JOIN students s2 ON s2.student_id = a.student_id
+      WHERE s2.department_id = ?
+      AND a.time_in IS NOT NULL
+    ), 0) AS avgHoursLogged,
 
     COALESCE((
       SELECT ROUND(AVG(NULLIF(c.required_hours, 0)))
@@ -361,22 +388,57 @@ class CoordinatorModel {
   LEFT JOIN courses cr ON cr.course_id = s.course_id
 
   LEFT JOIN (
-    SELECT 
-      student_id,
-      ROUND(SUM(
+  SELECT 
+    student_id,
+
+    ROUND(
+      SUM(
         (
-          IFNULL(TIME_TO_SEC(TIMEDIFF(morning_time_out, morning_time_in)), 0) +
-          IFNULL(TIME_TO_SEC(TIMEDIFF(afternoon_time_out, afternoon_time_in)), 0) +
-          IFNULL(TIME_TO_SEC(TIMEDIFF(ot_time_out, ot_time_in)), 0)
+          (
+            IFNULL(
+              TIME_TO_SEC(TIMEDIFF(time_out, time_in)),
+              0
+            )
+
+            - IF(
+                lunch_break_start IS NOT NULL
+                AND lunch_break_end IS NOT NULL,
+
+                TIME_TO_SEC(
+                  TIMEDIFF(
+                    lunch_break_end,
+                    lunch_break_start
+                  )
+                ),
+
+                IF(
+                  IFNULL(
+                    TIME_TO_SEC(TIMEDIFF(time_out, time_in)),
+                    0
+                  ) >= 18000,
+                  3600,
+                  0
+                )
+              )
+          )
+
+          + IFNULL(
+              TIME_TO_SEC(
+                TIMEDIFF(ot_time_out, ot_time_in)
+              ),
+              0
+            )
         ) / 3600
-      )) AS hours_completed
-    FROM attendance
-      WHERE 
-        morning_time_in IS NOT NULL OR
-        afternoon_time_in IS NOT NULL OR
-        ot_time_in IS NOT NULL
-      GROUP BY student_id
-  ) a ON a.student_id = s.student_id
+      )
+    ) AS hours_completed
+
+  FROM attendance
+
+  WHERE time_in IS NOT NULL
+
+  GROUP BY student_id
+
+) a ON a.student_id = s.student_id
 
   WHERE s.department_id = ?
   ORDER BY u.l_name ASC
@@ -415,12 +477,43 @@ class CoordinatorModel {
       COUNT(*) AS attendance_records,
       COUNT(DISTINCT attendance_date) AS attendance_days,
       ROUND(SUM(
-        (
-          IFNULL(TIME_TO_SEC(TIMEDIFF(morning_time_out, morning_time_in)), 0) +
-          IFNULL(TIME_TO_SEC(TIMEDIFF(afternoon_time_out, afternoon_time_in)), 0) +
-          IFNULL(TIME_TO_SEC(TIMEDIFF(ot_time_out, ot_time_in)), 0)
-        ) / 3600
-      )) AS hours_completed,
+(
+  (
+    IFNULL(
+      TIME_TO_SEC(TIMEDIFF(time_out, time_in)),
+      0
+    )
+
+    - IF(
+        lunch_break_start IS NOT NULL
+        AND lunch_break_end IS NOT NULL,
+
+        TIME_TO_SEC(
+          TIMEDIFF(
+            lunch_break_end,
+            lunch_break_start
+          )
+        ),
+
+        IF(
+          IFNULL(
+            TIME_TO_SEC(TIMEDIFF(time_out, time_in)),
+            0
+          ) >= 18000,
+          3600,
+          0
+        )
+      )
+  )
+
+  + IFNULL(
+      TIME_TO_SEC(
+        TIMEDIFF(ot_time_out, ot_time_in)
+      ),
+      0
+    )
+) / 3600
+)) AS hours_completed,
       MAX(attendance_date) AS last_attendance_date
     FROM attendance
     WHERE student_id = ?
@@ -430,10 +523,10 @@ class CoordinatorModel {
     const [recent] = await db.query(`
     SELECT
       attendance_date AS date,
-      morning_time_in,
-      morning_time_out,
-      afternoon_time_in,
-      afternoon_time_out,
+      time_in,
+      lunch_break_start,
+      lunch_break_end,
+      time_out,
       ot_time_in,
       ot_time_out
     FROM attendance
@@ -455,7 +548,12 @@ class CoordinatorModel {
   // =========================
   // ASSIGN COMPANY (coordinator)
   // =========================
-  static async assignCompany(studentId, companyId) {
+  static async assignCompany(
+    studentId,
+    companyId,
+    start_time = "08:30:00",
+    end_time = "17:00:00"
+  ) {
 
     // Check if company exists and is ACTIVE
     const [[company]] = await db.query(
@@ -476,9 +574,17 @@ class CoordinatorModel {
     // Assign company
     await db.query(
       `UPDATE students
-     SET company_id = ?
-     WHERE student_id = ?`,
-      [companyId, studentId]
+        SET 
+          company_id = ?,
+          start_time = ?,
+          end_time = ?
+        WHERE student_id = ?`,
+      [
+        companyId,
+        start_time,
+        end_time,
+        studentId
+      ]
     );
 
     // Notify student
