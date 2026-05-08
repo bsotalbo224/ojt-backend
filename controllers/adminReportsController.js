@@ -34,21 +34,67 @@ exports.getHoursSummary = async (req, res) => {
 // ===============================
 exports.getAttendanceSummary = async (req, res) => {
   try {
+
     const [rows] = await db.query(`
       SELECT 
         s.student_id AS id,
+
         CONCAT(u.f_name,' ',u.l_name) AS student,
+
         c.course_name AS course,
+
         comp.company_name AS company,
+
         s.ojt_hours_required AS required,
 
         ROUND(
           IFNULL(
             SUM(
               (
-                IFNULL(TIME_TO_SEC(TIMEDIFF(a.morning_time_out, a.morning_time_in)),0) +
-                IFNULL(TIME_TO_SEC(TIMEDIFF(a.afternoon_time_out, a.afternoon_time_in)),0) +
-                IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)),0)
+                (
+                  IFNULL(
+                    TIME_TO_SEC(
+                      TIMEDIFF(a.time_out, a.time_in)
+                    ),
+                    0
+                  )
+
+                  - IF(
+                      a.lunch_break_start IS NOT NULL
+                      AND a.lunch_break_end IS NOT NULL,
+
+                      TIME_TO_SEC(
+                        TIMEDIFF(
+                          a.lunch_break_end,
+                          a.lunch_break_start
+                        )
+                      ),
+
+                      IF(
+                        IFNULL(
+                          TIME_TO_SEC(
+                            TIMEDIFF(
+                              a.time_out,
+                              a.time_in
+                            )
+                          ),
+                          0
+                        ) >= 18000,
+                        3600,
+                        0
+                      )
+                    )
+                )
+
+                + IFNULL(
+                    TIME_TO_SEC(
+                      TIMEDIFF(
+                        a.ot_time_out,
+                        a.ot_time_in
+                      )
+                    ),
+                    0
+                  )
               ) / 3600
             ),
             0
@@ -57,19 +103,36 @@ exports.getAttendanceSummary = async (req, res) => {
         ) AS rendered
 
       FROM students s
-      LEFT JOIN users u ON s.user_id = u.user_id
-      LEFT JOIN courses c ON s.course_id = c.course_id
-      LEFT JOIN companies comp ON s.company_id = comp.company_id
-      LEFT JOIN attendance a ON s.student_id = a.student_id
+
+      LEFT JOIN users u
+        ON s.user_id = u.user_id
+
+      LEFT JOIN courses c
+        ON s.course_id = c.course_id
+
+      LEFT JOIN companies comp
+        ON s.company_id = comp.company_id
+
+      LEFT JOIN attendance a
+        ON s.student_id = a.student_id
 
       GROUP BY s.student_id
+
       ORDER BY student
     `);
 
     res.json(rows);
+
   } catch (err) {
-    console.error("ATTENDANCE SUMMARY ERROR:", err);
-    res.status(500).json({ message: "Server error" });
+
+    console.error(
+      "ATTENDANCE SUMMARY ERROR:",
+      err
+    );
+
+    res.status(500).json({
+      message: "Server error"
+    });
   }
 };
 
