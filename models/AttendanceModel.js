@@ -2,41 +2,69 @@ const db = require("../config/db");
 const { sendNotification } = require("../services/notificationServices");
 
 function getPHTime() {
-  const now = new Date();
-  now.setHours(now.getHours() + 8);
-
-  const hours = String(now.getHours()).padStart(2, "0");
-  const minutes = String(now.getMinutes()).padStart(2, "0");
-  const seconds = String(now.getSeconds()).padStart(2, "0");
-
-  return `${hours}:${minutes}:${seconds}`;
+  return new Date().toLocaleTimeString("en-CA", {
+    timeZone: "Asia/Manila",
+    hour12: false
+  });
 }
 
 class AttendanceModel {
 
   // =========================
+  // ACTIVE ATTENDANCE
+  // =========================
+  static async getActiveAttendance(student_id) {
+
+    const [[row]] = await db.query(`
+      SELECT *
+      FROM attendance
+      WHERE student_id = ?
+      AND (
+        time_out IS NULL
+        OR (
+          ot_time_in IS NOT NULL
+          AND ot_time_out IS NULL
+        )
+      )
+      ORDER BY attendance_id DESC
+      LIMIT 1
+    `, [student_id]);
+
+    return row || null;
+  }
+
+  // =========================
   // STUDENT ATTENDANCE
   // =========================
   static async getByStudent(student_id) {
+
     const [rows] = await db.query(`
       SELECT 
         attendance_id,
         student_id,
         attendance_date,
+
         time_in,
         lunch_break_start,
         lunch_break_end,
         time_out,
+
         ot_time_in,
         ot_time_out,
+
         latitude,
         longitude,
+
         location_status,
         coordinator_note,
         created_at
+
       FROM attendance
+
       WHERE student_id = ?
-      ORDER BY attendance_date DESC
+
+      ORDER BY attendance_date DESC,
+               attendance_id DESC
     `, [student_id]);
 
     return rows;
@@ -52,31 +80,91 @@ class AttendanceModel {
         a.attendance_id,
         a.student_id,
         a.attendance_date,
+
         a.time_in,
         a.lunch_break_start,
         a.lunch_break_end,
         a.time_out,
+
         a.ot_time_in,
         a.ot_time_out,
+
         a.latitude,
         a.longitude,
+
         a.location_status,
         a.coordinator_note,
+
         u.f_name,
         u.l_name,
-        u.photo
+        u.photo,
+
+        s.start_time,
+        s.end_time
+
       FROM attendance a
-      JOIN students s ON a.student_id = s.student_id
-      JOIN users u ON s.user_id = u.user_id
-      JOIN courses c ON s.course_id = c.course_id
+
+      JOIN students s
+        ON a.student_id = s.student_id
+
+      JOIN users u
+        ON s.user_id = u.user_id
+
+      JOIN courses c
+        ON s.course_id = c.course_id
     `;
 
     if (department_id) {
-      sql += ` WHERE c.department_id = ? `;
+
+      sql += `
+        WHERE c.department_id = ?
+      `;
+
       return (await db.query(sql, [department_id]))[0];
     }
 
     return (await db.query(sql))[0];
+  }
+
+  // =========================
+  // CHECK IF LUNCH REQUIRED
+  // =========================
+  static async requiresLunch(student_id) {
+
+    const [[student]] = await db.query(`
+      SELECT start_time, end_time
+      FROM students
+      WHERE student_id = ?
+      LIMIT 1
+    `, [student_id]);
+
+    if (!student?.start_time || !student?.end_time) {
+      return true;
+    }
+
+    const [hoursRow] = await db.query(`
+      SELECT
+        (
+          TIME_TO_SEC(
+            TIMEDIFF(
+              ?,
+              ?
+            )
+          ) / 3600
+        ) AS shift_hours
+    `, [
+      student.end_time,
+      student.start_time
+    ]);
+
+    let shiftHours = Number(hoursRow?.[0]?.shift_hours || 0);
+
+    // night shift correction
+    if (shiftHours < 0) {
+      shiftHours += 24;
+    }
+
+    return shiftHours >= 5;
   }
 
   // =========================
@@ -86,12 +174,7 @@ class AttendanceModel {
 
     const now = getPHTime();
 
-    const [[today]] = await db.query(`
-      SELECT *
-      FROM attendance
-      WHERE student_id = ?
-      AND attendance_date = CURDATE()
-    `, [student_id]);
+    const active = await this.getActiveAttendance(student_id);
 
     // =========================
     // LOCATION CHECK
@@ -103,7 +186,7 @@ class AttendanceModel {
       const [[location]] = await db.query(`
         SELECT latitude, longitude, radius_meters
         FROM students s
-        JOIN ojt_locations l 
+        JOIN ojt_locations l
           ON s.company_id = l.company_id
         WHERE s.student_id = ?
         LIMIT 1
@@ -130,7 +213,9 @@ class AttendanceModel {
           location.latitude
         ]);
 
-        if ((distanceResult.distance || 999999) <= location.radius_meters) {
+        if ((distanceResult.distance || 999999)
+          <= location.radius_meters) {
+
           location_status = "verified";
         }
       }
@@ -139,18 +224,28 @@ class AttendanceModel {
     // =========================
     // FIRST TIME IN
     // =========================
-    if (!today) {
+    if (!active) {
 
       const [result] = await db.query(`
         INSERT INTO attendance (
           student_id,
           attendance_date,
+
           time_in,
+
           latitude,
           longitude,
+
           location_status
         )
-        VALUES (?, CURDATE(), ?, ?, ?, ?)
+        VALUES (
+          ?,
+          CURDATE(),
+          ?,
+          ?,
+          ?,
+          ?
+        )
       `, [
         student_id,
         now,
@@ -165,20 +260,26 @@ class AttendanceModel {
     // =========================
     // BLOCK DUPLICATE TIME IN
     // =========================
-    if (today.time_in && !today.time_out) {
+    if (active.time_in && !active.time_out) {
       throw new Error("Already timed in");
     }
 
     // =========================
     // START OT
     // =========================
-    if (today.time_out && !today.ot_time_in) {
+    if (
+      active.time_out &&
+      !active.ot_time_in
+    ) {
 
       await db.query(`
         UPDATE attendance
         SET ot_time_in = ?
         WHERE attendance_id = ?
-      `, [now, today.attendance_id]);
+      `, [
+        now,
+        active.attendance_id
+      ]);
 
       return;
     }
@@ -186,7 +287,10 @@ class AttendanceModel {
     // =========================
     // BLOCK DUPLICATE OT
     // =========================
-    if (today.ot_time_in && !today.ot_time_out) {
+    if (
+      active.ot_time_in &&
+      !active.ot_time_out
+    ) {
       throw new Error("OT already started");
     }
 
@@ -200,30 +304,44 @@ class AttendanceModel {
 
     const now = getPHTime();
 
-    const [[today]] = await db.query(`
-      SELECT *
-      FROM attendance
-      WHERE student_id = ?
-      AND attendance_date = CURDATE()
-    `, [student_id]);
+    const active =
+      await this.getActiveAttendance(student_id);
 
-    if (!today) {
-      throw new Error("No attendance found");
+    if (!active) {
+      throw new Error("No active attendance");
     }
 
-    if (!today.time_in) {
+    if (!active.time_in) {
       throw new Error("Time in first");
     }
 
-    if (today.lunch_break_start) {
-      throw new Error("Lunch break already started");
+    if (active.time_out) {
+      throw new Error("Already timed out");
+    }
+
+    const requiresLunch =
+      await this.requiresLunch(student_id);
+
+    if (!requiresLunch) {
+      throw new Error(
+        "Lunch break not required for this shift"
+      );
+    }
+
+    if (active.lunch_break_start) {
+      throw new Error(
+        "Lunch break already started"
+      );
     }
 
     await db.query(`
       UPDATE attendance
       SET lunch_break_start = ?
       WHERE attendance_id = ?
-    `, [now, today.attendance_id]);
+    `, [
+      now,
+      active.attendance_id
+    ]);
   }
 
   // =========================
@@ -233,30 +351,33 @@ class AttendanceModel {
 
     const now = getPHTime();
 
-    const [[today]] = await db.query(`
-      SELECT *
-      FROM attendance
-      WHERE student_id = ?
-      AND attendance_date = CURDATE()
-    `, [student_id]);
+    const active =
+      await this.getActiveAttendance(student_id);
 
-    if (!today) {
-      throw new Error("No attendance found");
+    if (!active) {
+      throw new Error("No active attendance");
     }
 
-    if (!today.lunch_break_start) {
-      throw new Error("Lunch break not started");
+    if (!active.lunch_break_start) {
+      throw new Error(
+        "Lunch break not started"
+      );
     }
 
-    if (today.lunch_break_end) {
-      throw new Error("Lunch break already ended");
+    if (active.lunch_break_end) {
+      throw new Error(
+        "Lunch break already ended"
+      );
     }
 
     await db.query(`
       UPDATE attendance
       SET lunch_break_end = ?
       WHERE attendance_id = ?
-    `, [now, today.attendance_id]);
+    `, [
+      now,
+      active.attendance_id
+    ]);
   }
 
   // =========================
@@ -266,29 +387,33 @@ class AttendanceModel {
 
     const now = getPHTime();
 
-    const [[today]] = await db.query(`
-      SELECT *
-      FROM attendance
-      WHERE student_id = ?
-      AND attendance_date = CURDATE()
-    `, [student_id]);
+    const active =
+      await this.getActiveAttendance(student_id);
 
-    if (!today) {
-      throw new Error("No attendance found");
+    if (!active) {
+      throw new Error("No active attendance");
     }
 
     // =========================
     // REGULAR TIME OUT
     // =========================
-    if (today.time_in && !today.time_out) {
+    if (
+      active.time_in &&
+      !active.time_out
+    ) {
 
       await db.query(`
         UPDATE attendance
         SET time_out = ?
         WHERE attendance_id = ?
-      `, [now, today.attendance_id]);
+      `, [
+        now,
+        active.attendance_id
+      ]);
 
-      await this.checkCompletionAndNotify(student_id);
+      await this.checkCompletionAndNotify(
+        student_id
+      );
 
       return;
     }
@@ -296,20 +421,30 @@ class AttendanceModel {
     // =========================
     // END OT
     // =========================
-    if (today.ot_time_in && !today.ot_time_out) {
+    if (
+      active.ot_time_in &&
+      !active.ot_time_out
+    ) {
 
       await db.query(`
         UPDATE attendance
         SET ot_time_out = ?
         WHERE attendance_id = ?
-      `, [now, today.attendance_id]);
+      `, [
+        now,
+        active.attendance_id
+      ]);
 
-      await this.checkCompletionAndNotify(student_id);
+      await this.checkCompletionAndNotify(
+        student_id
+      );
 
       return;
     }
 
-    throw new Error("Attendance already completed");
+    throw new Error(
+      "Attendance already completed"
+    );
   }
 
   // =========================
@@ -318,49 +453,64 @@ class AttendanceModel {
   static async getHoursByStudent(student_id) {
 
     const [[row]] = await db.query(`
-      SELECT IFNULL(
-        SUM(
-          (
+      SELECT
+        IFNULL(
+          SUM(
             (
-              IFNULL(
-                TIME_TO_SEC(TIMEDIFF(time_out, time_in)),
-                0
+              (
+                IFNULL(
+                  TIME_TO_SEC(
+                    TIMEDIFF(time_out, time_in)
+                  ),
+                  0
+                )
+
+                - IF(
+                    lunch_break_start IS NOT NULL
+                    AND lunch_break_end IS NOT NULL,
+
+                    TIME_TO_SEC(
+                      TIMEDIFF(
+                        lunch_break_end,
+                        lunch_break_start
+                      )
+                    ),
+
+                    IF(
+                      IFNULL(
+                        TIME_TO_SEC(
+                          TIMEDIFF(
+                            time_out,
+                            time_in
+                          )
+                        ),
+                        0
+                      ) >= 18000,
+                      3600,
+                      0
+                    )
+                  )
               )
 
-              - IF(
-                  lunch_break_start IS NOT NULL
-                  AND lunch_break_end IS NOT NULL,
-
+              + IFNULL(
                   TIME_TO_SEC(
                     TIMEDIFF(
-                      lunch_break_end,
-                      lunch_break_start
+                      ot_time_out,
+                      ot_time_in
                     )
                   ),
-
-                  IF(
-                    IFNULL(
-                      TIME_TO_SEC(TIMEDIFF(time_out, time_in)),
-                      0
-                    ) >= 18000,
-                    3600,
-                    0
-                  )
+                  0
                 )
-            )
+            ) / 3600
+          ),
+          0
+        ) AS hours
 
-            + IFNULL(
-                TIME_TO_SEC(
-                  TIMEDIFF(ot_time_out, ot_time_in)
-                ),
-                0
-              )
-          ) / 3600
-        ),
-        0
-      ) AS hours
       FROM attendance
+
       WHERE student_id = ?
+      AND time_in IS NOT NULL
+      AND time_out IS NOT NULL
     `, [student_id]);
 
     return row.hours || 0;
@@ -372,22 +522,32 @@ class AttendanceModel {
   static async checkCompletionAndNotify(student_id) {
 
     const [[row]] = await db.query(`
-      SELECT 
+      SELECT
         s.user_id,
-        s.ojt_hours_required AS required_hours,
+
+        s.ojt_hours_required
+          AS required_hours,
 
         IFNULL(
           SUM(
             (
               (
                 IFNULL(
-                  TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
+                  TIME_TO_SEC(
+                    TIMEDIFF(
+                      a.time_out,
+                      a.time_in
+                    )
+                  ),
                   0
                 )
 
                 - IF(
-                    a.lunch_break_start IS NOT NULL
-                    AND a.lunch_break_end IS NOT NULL,
+                    a.lunch_break_start
+                      IS NOT NULL
+                    AND
+                    a.lunch_break_end
+                      IS NOT NULL,
 
                     TIME_TO_SEC(
                       TIMEDIFF(
@@ -398,7 +558,12 @@ class AttendanceModel {
 
                     IF(
                       IFNULL(
-                        TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
+                        TIME_TO_SEC(
+                          TIMEDIFF(
+                            a.time_out,
+                            a.time_in
+                          )
+                        ),
                         0
                       ) >= 18000,
                       3600,
@@ -409,7 +574,10 @@ class AttendanceModel {
 
               + IFNULL(
                   TIME_TO_SEC(
-                    TIMEDIFF(a.ot_time_out, a.ot_time_in)
+                    TIMEDIFF(
+                      a.ot_time_out,
+                      a.ot_time_in
+                    )
                   ),
                   0
                 )
@@ -419,15 +587,23 @@ class AttendanceModel {
         ) AS completed_hours
 
       FROM students s
-      LEFT JOIN attendance a 
+
+      LEFT JOIN attendance a
         ON s.student_id = a.student_id
+
       WHERE s.student_id = ?
-      GROUP BY s.user_id, s.ojt_hours_required
+
+      GROUP BY
+        s.user_id,
+        s.ojt_hours_required
     `, [student_id]);
 
     if (!row) return;
 
-    if (row.completed_hours < row.required_hours) {
+    if (
+      row.completed_hours
+      < row.required_hours
+    ) {
       return;
     }
 
@@ -444,7 +620,8 @@ class AttendanceModel {
     await sendNotification({
       user_id: row.user_id,
       title: "OJT Completed",
-      message: "Congratulations! You have completed your required OJT hours.",
+      message:
+        "Congratulations! You have completed your required OJT hours.",
       type: "system",
       link: "/student/progress"
     });
@@ -455,19 +632,32 @@ class AttendanceModel {
   // =========================
   static async getToday(student_id) {
 
+    const active =
+      await this.getActiveAttendance(student_id);
+
+    if (active) {
+      return active;
+    }
+
     const [rows] = await db.query(`
-      SELECT 
+      SELECT
         attendance_id,
         attendance_date,
+
         time_in,
         lunch_break_start,
         lunch_break_end,
         time_out,
+
         ot_time_in,
         ot_time_out
+
       FROM attendance
+
       WHERE student_id = ?
       AND attendance_date = CURDATE()
+
+      ORDER BY attendance_id DESC
       LIMIT 1
     `, [student_id]);
 
@@ -480,18 +670,24 @@ class AttendanceModel {
   static async getStudentHistory(student_id) {
 
     const [rows] = await db.query(`
-      SELECT 
+      SELECT
         attendance_id,
         attendance_date,
+
         time_in,
         lunch_break_start,
         lunch_break_end,
         time_out,
+
         ot_time_in,
         ot_time_out
+
       FROM attendance
+
       WHERE student_id = ?
-      ORDER BY attendance_date DESC
+
+      ORDER BY attendance_date DESC,
+               attendance_id DESC
     `, [student_id]);
 
     return rows;
@@ -500,15 +696,24 @@ class AttendanceModel {
   // =========================
   // UPDATE LOCATION STATUS
   // =========================
-  static async updateLocationStatus(attendance_id, location_status) {
+  static async updateLocationStatus(
+    attendance_id,
+    location_status
+  ) {
 
     const [result] = await db.query(`
       UPDATE attendance
       SET location_status = ?
       WHERE attendance_id = ?
-    `, [location_status, attendance_id]);
+    `, [
+      location_status,
+      attendance_id
+    ]);
 
-    console.log("Rows affected:", result.affectedRows);
+    console.log(
+      "Rows affected:",
+      result.affectedRows
+    );
   }
 }
 
