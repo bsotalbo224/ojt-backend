@@ -366,6 +366,8 @@ class CoordinatorModel {
     COALESCE(a.hours_completed, 0) AS hours_completed,
 
     s.company_id,
+    s.start_time,
+    s.end_time,
     comp.company_name AS company,
 
     (
