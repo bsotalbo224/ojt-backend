@@ -56,17 +56,28 @@ PUT /api/coordinators/students/:id/assign-company
 ========================= */
 router.put("/students/:id/assign-company", async (req, res) => {
   try {
-    const { company_id } = req.body;
+
+    const {
+      company_id,
+      start_time,
+      end_time
+    } = req.body;
 
     await CoordinatorModel.assignCompany(
       req.params.id,
-      company_id
+      company_id,
+      start_time,
+      end_time
     );
 
     res.json({ success: true });
+
   } catch (err) {
     console.error("ASSIGN COMPANY ERROR:", err);
-    res.status(500).json({ message: "Server error" });
+
+    res.status(500).json({
+      message: err.message
+    });
   }
 });
 
