@@ -183,7 +183,8 @@ router.get("/history", requireRole("student"), async (req, res) => {
 
     const studentId = req.user.student_id;
 
-    const todayRow = await AttendanceModel.getToday(studentId);
+    const todayRow =
+      await AttendanceModel.getToday(studentId);
 
     const historyRows =
       await AttendanceModel.getStudentHistory(studentId);
@@ -194,21 +195,32 @@ router.get("/history", requireRole("student"), async (req, res) => {
     const today = todayRow
       ? {
           id: todayRow.attendance_id,
+
           date: todayRow.attendance_date,
 
-          timeIn: todayRow.time_in,
+          time_in:
+            todayRow.time_in,
 
-          lunchBreakStart:
+          lunch_break_start:
             todayRow.lunch_break_start,
 
-          lunchBreakEnd:
+          lunch_break_end:
             todayRow.lunch_break_end,
 
-          timeOut: todayRow.time_out,
+          time_out:
+            todayRow.time_out,
 
-          otStart: todayRow.ot_time_in,
+          ot_time_in:
+            todayRow.ot_time_in,
 
-          otEnd: todayRow.ot_time_out
+          ot_time_out:
+            todayRow.ot_time_out,
+
+          start_time:
+            todayRow.start_time,
+
+          end_time:
+            todayRow.end_time
         }
       : null;
 
@@ -220,19 +232,29 @@ router.get("/history", requireRole("student"), async (req, res) => {
 
       date: r.attendance_date,
 
-      timeIn: r.time_in,
+      time_in:
+        r.time_in,
 
-      lunchBreakStart:
+      lunch_break_start:
         r.lunch_break_start,
 
-      lunchBreakEnd:
+      lunch_break_end:
         r.lunch_break_end,
 
-      timeOut: r.time_out,
+      time_out:
+        r.time_out,
 
-      otStart: r.ot_time_in,
+      ot_time_in:
+        r.ot_time_in,
 
-      otEnd: r.ot_time_out
+      ot_time_out:
+        r.ot_time_out,
+
+      start_time:
+        r.start_time,
+
+      end_time:
+        r.end_time
     }));
 
     res.json({
@@ -243,7 +265,10 @@ router.get("/history", requireRole("student"), async (req, res) => {
 
   } catch (err) {
 
-    console.error("ATTENDANCE HISTORY ERROR:", err);
+    console.error(
+      "ATTENDANCE HISTORY ERROR:",
+      err
+    );
 
     res.status(500).json({
       success: false

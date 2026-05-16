@@ -628,71 +628,102 @@ class AttendanceModel {
     });
   }
 
-  // =========================
-  // TODAY
-  // =========================
-  static async getToday(student_id) {
+// =========================
+// TODAY
+// =========================
+static async getToday(student_id) {
 
-    const active =
-      await this.getActiveAttendance(student_id);
+  const active =
+    await this.getActiveAttendance(student_id);
 
-    if (active) {
-      return active;
-    }
+  if (active) {
 
-    const [rows] = await db.query(`
+    const [[student]] = await db.query(`
       SELECT
-        attendance_id,
-        attendance_date,
-
-        time_in,
-        lunch_break_start,
-        lunch_break_end,
-        time_out,
-
-        ot_time_in,
-        ot_time_out
-
-      FROM attendance
-
+        start_time,
+        end_time
+      FROM students
       WHERE student_id = ?
-      AND attendance_date = CURDATE()
-
-      ORDER BY attendance_id DESC
       LIMIT 1
     `, [student_id]);
 
-    return rows[0] || null;
+    return {
+      ...active,
+
+      start_time:
+        student?.start_time || null,
+
+      end_time:
+        student?.end_time || null
+    };
   }
 
+  const [rows] = await db.query(`
+    SELECT
+      a.attendance_id,
+      a.attendance_date,
+
+      a.time_in,
+      a.lunch_break_start,
+      a.lunch_break_end,
+      a.time_out,
+
+      a.ot_time_in,
+      a.ot_time_out,
+
+      s.start_time,
+      s.end_time
+
+    FROM attendance a
+
+    JOIN students s
+      ON a.student_id = s.student_id
+
+    WHERE a.student_id = ?
+    AND a.attendance_date = CURDATE()
+
+    ORDER BY a.attendance_id DESC
+    LIMIT 1
+  `, [student_id]);
+
+  return rows[0] || null;
+}
+
   // =========================
-  // HISTORY
-  // =========================
-  static async getStudentHistory(student_id) {
+// HISTORY
+// =========================
+static async getStudentHistory(student_id) {
 
-    const [rows] = await db.query(`
-      SELECT
-        attendance_id,
-        attendance_date,
+  const [rows] = await db.query(`
+    SELECT
+      a.attendance_id,
+      a.attendance_date,
 
-        time_in,
-        lunch_break_start,
-        lunch_break_end,
-        time_out,
+      a.time_in,
+      a.lunch_break_start,
+      a.lunch_break_end,
+      a.time_out,
 
-        ot_time_in,
-        ot_time_out
+      a.ot_time_in,
+      a.ot_time_out,
 
-      FROM attendance
+      s.start_time,
+      s.end_time
 
-      WHERE student_id = ?
+    FROM attendance a
 
-      ORDER BY attendance_date DESC,
-               attendance_id DESC
-    `, [student_id]);
+    JOIN students s
+      ON a.student_id = s.student_id
 
-    return rows;
-  }
+    WHERE a.student_id = ?
+
+    ORDER BY
+      a.attendance_date DESC,
+      a.attendance_id DESC
+  `, [student_id]);
+
+  return rows;
+}
 
   // =========================
   // UPDATE LOCATION STATUS
