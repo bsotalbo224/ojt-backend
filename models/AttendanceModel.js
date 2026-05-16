@@ -15,23 +15,24 @@ class AttendanceModel {
   // =========================
   static async getActiveAttendance(student_id) {
 
-    const [[row]] = await db.query(`
-      SELECT *
-      FROM attendance
-      WHERE student_id = ?
-      AND (
-        time_out IS NULL
-        OR (
-          ot_time_in IS NOT NULL
-          AND ot_time_out IS NULL
-        )
+  const [[row]] = await db.query(`
+    SELECT *
+    FROM attendance
+    WHERE student_id = ?
+    AND attendance_date = CURDATE()
+    AND (
+      time_out IS NULL
+      OR (
+        ot_time_in IS NOT NULL
+        AND ot_time_out IS NULL
       )
-      ORDER BY attendance_id DESC
-      LIMIT 1
-    `, [student_id]);
+    )
+    ORDER BY attendance_id DESC
+    LIMIT 1
+  `, [student_id]);
 
-    return row || null;
-  }
+  return row || null;
+}
 
   // =========================
   // STUDENT ATTENDANCE
