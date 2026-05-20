@@ -747,6 +747,57 @@ static async getStudentHistory(student_id) {
       result.affectedRows
     );
   }
+  // =========================
+// COORDINATOR: STUDENT RECORDS
+// =========================
+static async getStudentAttendanceRecords(
+  student_id
+) {
+
+  const [rows] = await db.query(`
+    SELECT
+      a.attendance_id,
+      a.student_id,
+      a.attendance_date,
+
+      a.time_in,
+      a.lunch_break_start,
+      a.lunch_break_end,
+      a.time_out,
+
+      a.ot_time_in,
+      a.ot_time_out,
+
+      a.latitude,
+      a.longitude,
+
+      a.location_status,
+      a.coordinator_note,
+
+      u.f_name,
+      u.l_name,
+      u.photo,
+
+      s.start_time,
+      s.end_time
+
+    FROM attendance a
+
+    JOIN students s
+      ON a.student_id = s.student_id
+
+    JOIN users u
+      ON s.user_id = u.user_id
+
+    WHERE a.student_id = ?
+
+    ORDER BY
+      a.attendance_date DESC,
+      a.attendance_id DESC
+  `, [student_id]);
+
+  return rows;
+}
 }
 
 module.exports = AttendanceModel;

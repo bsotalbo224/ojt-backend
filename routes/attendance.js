@@ -53,6 +53,39 @@ router.get("/coordinator", requireRole("coordinator"), async (req, res) => {
 });
 
 /* ===================================================
+COORDINATOR: STUDENT ATTENDANCE RECORDS
+=================================================== */
+router.get(
+  "/student/:studentId",
+  requireRole("coordinator"),
+  async (req, res) => {
+
+    try {
+
+      const { studentId } = req.params;
+
+      const data =
+        await AttendanceModel.getStudentAttendanceRecords(
+          studentId
+        );
+
+      res.json(data);
+
+    } catch (err) {
+
+      console.error(
+        "STUDENT ATTENDANCE RECORDS ERROR:",
+        err
+      );
+
+      res.status(500).json({
+        message: "Server error"
+      });
+    }
+  }
+);
+
+/* ===================================================
 ADMIN: ALL ATTENDANCE
 =================================================== */
 router.get("/admin", requireRole("admin"), async (req, res) => {
