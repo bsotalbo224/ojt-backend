@@ -15,7 +15,7 @@ class AttendanceModel {
   // =========================
   static async getActiveAttendance(student_id) {
 
-  const [[row]] = await db.query(`
+    const [[row]] = await db.query(`
     SELECT *
     FROM attendance
     WHERE student_id = ?
@@ -31,8 +31,8 @@ class AttendanceModel {
     LIMIT 1
   `, [student_id]);
 
-  return row || null;
-}
+    return row || null;
+  }
 
   // =========================
   // STUDENT ATTENDANCE
@@ -512,6 +512,7 @@ class AttendanceModel {
       WHERE student_id = ?
       AND time_in IS NOT NULL
       AND time_out IS NOT NULL
+      AND location_status = 'verified'
     `, [student_id]);
 
     return row.hours || 0;
@@ -591,6 +592,7 @@ class AttendanceModel {
 
       LEFT JOIN attendance a
         ON s.student_id = a.student_id
+        AND a.location_status = 'verified'
 
       WHERE s.student_id = ?
 
@@ -628,17 +630,17 @@ class AttendanceModel {
     });
   }
 
-// =========================
-// TODAY
-// =========================
-static async getToday(student_id) {
+  // =========================
+  // TODAY
+  // =========================
+  static async getToday(student_id) {
 
-  const active =
-    await this.getActiveAttendance(student_id);
+    const active =
+      await this.getActiveAttendance(student_id);
 
-  if (active) {
+    if (active) {
 
-    const [[student]] = await db.query(`
+      const [[student]] = await db.query(`
       SELECT
         start_time,
         end_time
@@ -647,18 +649,18 @@ static async getToday(student_id) {
       LIMIT 1
     `, [student_id]);
 
-    return {
-      ...active,
+      return {
+        ...active,
 
-      start_time:
-        student?.start_time || null,
+        start_time:
+          student?.start_time || null,
 
-      end_time:
-        student?.end_time || null
-    };
-  }
+        end_time:
+          student?.end_time || null
+      };
+    }
 
-  const [rows] = await db.query(`
+    const [rows] = await db.query(`
     SELECT
       a.attendance_id,
       a.attendance_date,
@@ -686,15 +688,15 @@ static async getToday(student_id) {
     LIMIT 1
   `, [student_id]);
 
-  return rows[0] || null;
-}
+    return rows[0] || null;
+  }
 
   // =========================
-// HISTORY
-// =========================
-static async getStudentHistory(student_id) {
+  // HISTORY
+  // =========================
+  static async getStudentHistory(student_id) {
 
-  const [rows] = await db.query(`
+    const [rows] = await db.query(`
     SELECT
       a.attendance_id,
       a.attendance_date,
@@ -722,8 +724,8 @@ static async getStudentHistory(student_id) {
       a.attendance_id DESC
   `, [student_id]);
 
-  return rows;
-}
+    return rows;
+  }
 
   // =========================
   // UPDATE LOCATION STATUS
@@ -748,13 +750,13 @@ static async getStudentHistory(student_id) {
     );
   }
   // =========================
-// COORDINATOR: STUDENT RECORDS
-// =========================
-static async getStudentAttendanceRecords(
-  student_id
-) {
+  // COORDINATOR: STUDENT RECORDS
+  // =========================
+  static async getStudentAttendanceRecords(
+    student_id
+  ) {
 
-  const [rows] = await db.query(`
+    const [rows] = await db.query(`
     SELECT
       a.attendance_id,
       a.student_id,
@@ -796,8 +798,8 @@ static async getStudentAttendanceRecords(
       a.attendance_id DESC
   `, [student_id]);
 
-  return rows;
-}
+    return rows;
+  }
 }
 
 module.exports = AttendanceModel;

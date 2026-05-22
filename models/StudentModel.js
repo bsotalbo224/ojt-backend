@@ -230,7 +230,7 @@ class StudentModel {
     return rows;
   }
 
- // =========================
+// =========================
 // STUDENT PROGRESS (coordinator)
 // =========================
 static async getStudentProgress(student_id) {
@@ -240,79 +240,125 @@ static async getStudentProgress(student_id) {
     SELECT 
       s.student_id,
       s.ojt_hours_required,
+
       u.f_name,
       u.l_name,
+
       c.course_code AS course,
+
       comp.company_name AS company
+
     FROM students s
-    JOIN users u ON s.user_id = u.user_id
-    LEFT JOIN courses c ON s.course_id = c.course_id
-    LEFT JOIN companies comp ON s.company_id = comp.company_id
+
+    JOIN users u
+      ON s.user_id = u.user_id
+
+    LEFT JOIN courses c
+      ON s.course_id = c.course_id
+
+    LEFT JOIN companies comp
+      ON s.company_id = comp.company_id
+
     WHERE s.student_id = ?
   `, [student_id]);
 
-  // Attendance summary
+  // =========================
+  // ATTENDANCE SUMMARY
+  // VERIFIED ONLY COUNTS
+  // =========================
   const [[summary]] = await db.query(`
     SELECT
-      COUNT(DISTINCT attendance_date) AS attendanceRecords,
-      COUNT(DISTINCT attendance_date) AS attendanceDays,
 
-      MAX(attendance_date) AS lastAttendance,
+      COUNT(DISTINCT attendance_date)
+        AS attendanceRecords,
 
-      IFNULL(
-        SUM(
-          (
-            (
-              IFNULL(
-                TIME_TO_SEC(TIMEDIFF(time_out, time_in)),
-                0
-              )
+      COUNT(DISTINCT attendance_date)
+        AS attendanceDays,
 
-              - IF(
-                  lunch_break_start IS NOT NULL
-                  AND lunch_break_end IS NOT NULL,
+      MAX(attendance_date)
+        AS lastAttendance,
 
-                  TIME_TO_SEC(
-                    TIMEDIFF(
-                      lunch_break_end,
-                      lunch_break_start
-                    )
-                  ),
+      ROUND(
+        IFNULL(
+          SUM(
+            CASE
 
-                  IF(
-                    IFNULL(
-                      TIME_TO_SEC(
-                        TIMEDIFF(time_out, time_in)
-                      ),
-                      0
-                    ) >= 18000,
-                    3600,
+              WHEN location_status = 'verified'
+
+              THEN (
+
+                (
+                  IFNULL(
+                    TIME_TO_SEC(
+                      TIMEDIFF(
+                        time_out,
+                        time_in
+                      )
+                    ),
                     0
                   )
-                )
-            )
 
-            + IFNULL(
-                TIME_TO_SEC(
-                  TIMEDIFF(
-                    ot_time_out,
-                    ot_time_in
+                  - IF(
+                      lunch_break_start IS NOT NULL
+                      AND lunch_break_end IS NOT NULL,
+
+                      TIME_TO_SEC(
+                        TIMEDIFF(
+                          lunch_break_end,
+                          lunch_break_start
+                        )
+                      ),
+
+                      IF(
+                        IFNULL(
+                          TIME_TO_SEC(
+                            TIMEDIFF(
+                              time_out,
+                              time_in
+                            )
+                          ),
+                          0
+                        ) >= 18000,
+                        3600,
+                        0
+                      )
+                    )
+                )
+
+                + IFNULL(
+                    TIME_TO_SEC(
+                      TIMEDIFF(
+                        ot_time_out,
+                        ot_time_in
+                      )
+                    ),
+                    0
                   )
-                ),
-                0
               )
-          ) / 3600
-        ),
-        0
+
+              ELSE 0
+
+            END
+          ),
+          0
+        ) / 3600,
+        2
       ) AS hoursCompleted
 
     FROM attendance
+
     WHERE student_id = ?
   `, [student_id]);
 
-  // Recent attendance
+  // =========================
+  // RECENT ATTENDANCE
+  // KEEP FLAGGED VISIBLE
+  // =========================
   const [recentAttendance] = await db.query(`
     SELECT
+
+      attendance_id,
+
       attendance_date AS date,
 
       time_in,
@@ -323,11 +369,18 @@ static async getStudentProgress(student_id) {
       ot_time_in,
       ot_time_out,
 
+      location_status,
+
       ROUND(
         (
           (
             IFNULL(
-              TIME_TO_SEC(TIMEDIFF(time_out, time_in)),
+              TIME_TO_SEC(
+                TIMEDIFF(
+                  time_out,
+                  time_in
+                )
+              ),
               0
             )
 
@@ -345,7 +398,10 @@ static async getStudentProgress(student_id) {
                 IF(
                   IFNULL(
                     TIME_TO_SEC(
-                      TIMEDIFF(time_out, time_in)
+                      TIMEDIFF(
+                        time_out,
+                        time_in
+                      )
                     ),
                     0
                   ) >= 18000,
@@ -372,16 +428,28 @@ static async getStudentProgress(student_id) {
 
     WHERE student_id = ?
 
-    ORDER BY attendance_date DESC
+    ORDER BY
+      attendance_date DESC,
+      attendance_id DESC
+
     LIMIT 5
   `, [student_id]);
 
   return {
     student,
-    attendanceDays: summary.attendanceDays || 0,
-    attendanceRecords: summary.attendanceRecords || 0,
-    lastAttendance: summary.lastAttendance,
-    hoursCompleted: summary.hoursCompleted || 0,
+
+    attendanceDays:
+      summary.attendanceDays || 0,
+
+    attendanceRecords:
+      summary.attendanceRecords || 0,
+
+    lastAttendance:
+      summary.lastAttendance,
+
+    hoursCompleted:
+      summary.hoursCompleted || 0,
+
     recentAttendance
   };
 }
