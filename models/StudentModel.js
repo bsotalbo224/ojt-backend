@@ -238,15 +238,19 @@ static async getStudentProgress(student_id) {
   // Student basic info
   const [[student]] = await db.query(`
     SELECT 
-      s.student_id,
-      s.ojt_hours_required,
+  s.student_id,
 
-      u.f_name,
-      u.l_name,
+  s.ojt_hours_required,
 
-      c.course_code AS course,
+  s.start_time,
+  s.end_time,
 
-      comp.company_name AS company
+  u.f_name,
+  u.l_name,
+
+  c.course_code AS course,
+
+  comp.company_name AS company
 
     FROM students s
 
