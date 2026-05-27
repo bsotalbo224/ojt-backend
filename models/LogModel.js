@@ -181,6 +181,8 @@ class LogModel {
       SELECT 
         l.*,
 
+        u.f_name,
+        u.l_name,
         CONCAT(u.f_name,' ',u.l_name) AS student_name,
         u.photo,
 
