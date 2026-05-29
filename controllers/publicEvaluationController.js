@@ -8,7 +8,7 @@ GET /api/public-evaluation/template/:id
 exports.getPublicTemplate = async (req, res) => {
   const { token } = req.params;
 
-  console.log("PUBLIC TEMPLATE REQUEST:", id);
+  console.log("PUBLIC TEMPLATE REQUEST:", token);
 
   try {
 
