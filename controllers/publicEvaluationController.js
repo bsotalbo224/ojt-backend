@@ -6,16 +6,16 @@ GET /api/public-evaluation/template/:id
 */
 
 exports.getPublicTemplate = async (req, res) => {
-  const { id } = req.params;
+  const { token } = req.params;
 
-  console.log("PUBLIC TEMPLATE REQUEST:", id); 
+  console.log("PUBLIC TEMPLATE REQUEST:", id);
 
   try {
 
     const [[template]] = await db.query(
       `SELECT * FROM evaluation_templates
-   WHERE id=? AND is_active=1`,
-      [id]
+   WHERE public_token=? AND is_active=1`,
+      [token]
     );
 
     if (!template) {
@@ -26,7 +26,7 @@ exports.getPublicTemplate = async (req, res) => {
       `SELECT * FROM evaluation_sections
        WHERE template_id=?
        ORDER BY sort_order`,
-      [id]
+      [template.id]
     );
 
     for (const s of sections) {
