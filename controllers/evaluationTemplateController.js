@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const {nanoid} = require("nanoid");
 
 const insertSections = async (conn, templateId, sections) => {
   if (!Array.isArray(sections)) return;
@@ -412,16 +413,22 @@ exports.publishTemplate = async (req, res) => {
   const { id } = req.params;
 
   try {
-    const link = `${process.env.CLIENT_URL}/evaluate/${id}`;
+    // Generate token
+    const publicToken = nanoid(12);
 
+    // Generate public link
+    const link = `${process.env.CLIENT_URL}/evaluate/${publicToken}`;
+
+    // Save token + publish
     await db.query(`
       UPDATE evaluation_templates
-      SET status='published',
+      SET status = 'published',
           is_active = 1,
+          public_token = ?,
           link = ?,
           is_accepting_responses = 1
-      WHERE id=?
-    `, [link, id]);
+      WHERE id = ?
+    `, [publicToken, link, id]);
 
     res.json({
       success: true,
@@ -429,6 +436,7 @@ exports.publishTemplate = async (req, res) => {
     });
 
   } catch (err) {
+    console.error("PUBLISH TEMPLATE ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 };

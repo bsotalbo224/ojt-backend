@@ -29,6 +29,7 @@
     "multer": "^2.0.2",
     "multer-storage-cloudinary": "^4.0.0",
     "mysql2": "^3.15.3",
+    "nanoid": "^5.1.11",
     "node-cron": "^4.2.1",
     "nodemailer": "^8.0.3",
     "socket.io": "^4.8.3"
