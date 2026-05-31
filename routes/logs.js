@@ -214,6 +214,8 @@ router.get("/:id", async (req, res) => {
     const user = req.user;
 
     const log = await LogModel.getById(logId);
+    console.log("USER DEPT:", user.department_id);
+    console.log("LOG DEPT:", log.department_id);
 
     if (!log) {
       return res.status(404).json({ message: "Log not found" });
