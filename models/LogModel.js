@@ -122,11 +122,23 @@ static async getById(log_id) {
       u.photo,
 
       cr.course_code AS course,
+      d.department_name,
+      comp.company_name,
+
+      s.start_time,
+      s.end_time,
 
       a.time_in,
       a.lunch_break_start,
       a.lunch_break_end,
       a.time_out,
+
+      a.time_in AS morning_time_in,
+      a.lunch_break_start AS morning_time_out,
+
+      a.lunch_break_end AS afternoon_time_in,
+      a.time_out AS afternoon_time_out,
+
       a.ot_time_in,
       a.ot_time_out,
 
@@ -187,6 +199,12 @@ static async getById(log_id) {
     LEFT JOIN courses cr
       ON cr.course_id = s.course_id
 
+    LEFT JOIN departments d
+      ON d.department_id = s.department_id
+
+    LEFT JOIN companies comp
+      ON comp.company_id = s.company_id  
+
     LEFT JOIN attendance a
       ON l.student_id = a.student_id
       AND l.log_date = a.attendance_date
@@ -211,6 +229,27 @@ static async getById(log_id) {
   log.attachments = attachments;
 
   return log;
+}
+
+// =========================
+// GET ATTACHMENT BY ID
+// =========================
+static async getAttachmentById(attachmentId) {
+
+  const [[file]] = await db.query(`
+    SELECT
+      a.*,
+      l.student_id,
+      s.department_id
+    FROM attachments a
+    JOIN daily_logs l
+      ON l.log_id = a.log_id
+    JOIN students s
+      ON s.student_id = l.student_id
+    WHERE a.attachment_id = ?
+  `, [attachmentId]);
+
+  return file || null;
 }
 
   // =========================
