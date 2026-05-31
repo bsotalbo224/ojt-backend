@@ -104,7 +104,7 @@ class LogModel {
     return result.insertId;
   }
 
- // =========================
+// =========================
 // SINGLE LOG
 // =========================
 static async getById(log_id) {
@@ -113,8 +113,15 @@ static async getById(log_id) {
     SELECT
       l.*,
 
-      s.department_id,
       s.student_id,
+      s.department_id,
+
+      u.f_name,
+      u.l_name,
+      CONCAT(u.f_name,' ',u.l_name) AS student_name,
+      u.photo,
+
+      cr.course_code AS course,
 
       a.time_in,
       a.lunch_break_start,
@@ -161,12 +168,24 @@ static async getById(log_id) {
             )
         ) / 3600,
         2
-      ) AS total_hours
+      ) AS total_hours,
+
+      (
+        SELECT COUNT(*)
+        FROM attachments att
+        WHERE att.log_id = l.log_id
+      ) AS attachment_count
 
     FROM daily_logs l
 
     JOIN students s
       ON s.student_id = l.student_id
+
+    JOIN users u
+      ON u.user_id = s.user_id
+
+    LEFT JOIN courses cr
+      ON cr.course_id = s.course_id
 
     LEFT JOIN attendance a
       ON l.student_id = a.student_id
@@ -175,7 +194,23 @@ static async getById(log_id) {
     WHERE l.log_id = ?
   `, [log_id]);
 
-  return log || null;
+  if (!log) return null;
+
+  const [attachments] = await db.query(`
+    SELECT
+      attachment_id,
+      file_name,
+      file_path,
+      file_type,
+      uploaded_at
+    FROM attachments
+    WHERE log_id = ?
+    ORDER BY uploaded_at DESC
+  `, [log_id]);
+
+  log.attachments = attachments;
+
+  return log;
 }
 
   // =========================
