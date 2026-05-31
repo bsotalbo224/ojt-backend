@@ -104,73 +104,79 @@ class LogModel {
     return result.insertId;
   }
 
-  // =========================
-  // SINGLE LOG
-  // =========================
-  static async getById(log_id) {
+ // =========================
+// SINGLE LOG
+// =========================
+static async getById(log_id) {
 
-    const [[log]] = await db.query(`
-      SELECT 
-        l.*,
+  const [[log]] = await db.query(`
+    SELECT
+      l.*,
 
-        a.time_in,
-        a.lunch_break_start,
-        a.lunch_break_end,
-        a.time_out,
-        a.ot_time_in,
-        a.ot_time_out,
+      s.department_id,
+      s.student_id,
 
-        ROUND(
+      a.time_in,
+      a.lunch_break_start,
+      a.lunch_break_end,
+      a.time_out,
+      a.ot_time_in,
+      a.ot_time_out,
+
+      ROUND(
+        (
           (
-            (
-              IFNULL(
-                TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
-                0
-              )
-
-              - IF(
-                  a.lunch_break_start IS NOT NULL
-                  AND a.lunch_break_end IS NOT NULL,
-
-                  TIME_TO_SEC(
-                    TIMEDIFF(
-                      a.lunch_break_end,
-                      a.lunch_break_start
-                    )
-                  ),
-
-                  IF(
-                    IFNULL(
-                      TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
-                      0
-                    ) >= 18000,
-                    3600,
-                    0
-                  )
-                )
+            IFNULL(
+              TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
+              0
             )
 
-            + IFNULL(
+            - IF(
+                a.lunch_break_start IS NOT NULL
+                AND a.lunch_break_end IS NOT NULL,
+
                 TIME_TO_SEC(
-                  TIMEDIFF(a.ot_time_out, a.ot_time_in)
+                  TIMEDIFF(
+                    a.lunch_break_end,
+                    a.lunch_break_start
+                  )
                 ),
-                0
+
+                IF(
+                  IFNULL(
+                    TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
+                    0
+                  ) >= 18000,
+                  3600,
+                  0
+                )
               )
-          ) / 3600,
-          2
-        ) AS total_hours
+          )
 
-      FROM daily_logs l
+          + IFNULL(
+              TIME_TO_SEC(
+                TIMEDIFF(a.ot_time_out, a.ot_time_in)
+              ),
+              0
+            )
+        ) / 3600,
+        2
+      ) AS total_hours
 
-      LEFT JOIN attendance a
-        ON l.student_id = a.student_id
-        AND l.log_date = a.attendance_date
+    FROM daily_logs l
 
-      WHERE l.log_id = ?
-    `, [log_id]);
+    JOIN students s
+      ON s.student_id = l.student_id
 
-    return log || null;
-  }
+    LEFT JOIN attendance a
+      ON l.student_id = a.student_id
+      AND l.log_date = a.attendance_date
+
+    WHERE l.log_id = ?
+  `, [log_id]);
+
+  return log || null;
+}
 
   // =========================
   // COORDINATOR / ADMIN LOGS
