@@ -141,6 +141,9 @@ const evaluationTemplatesRoutes = require("./routes/evaluationTemplates");
 const publicEvaluationRoutes = require("./routes/publicEvaluation");
 const evaluationResponsesRoutes = require("./routes/evaluationResponses");
 
+// academic year module
+const academicYearsRoutes = require("./routes/academicYears");
+
 //////////////////////////////////////////////////////
 // =========================
 // GLOBAL MIDDLEWARE
@@ -244,6 +247,8 @@ app.use("/api/notifications", notificationRoutes);
 // ADMIN MODULES
 // =========================
 //////////////////////////////////////////////////////
+
+app.use("/api/academic-years", academicYearsRoutes);
 
 app.use("/api/admin/departments", departmentsRoutes);
 app.use("/api/courses", coursesRoutes);
