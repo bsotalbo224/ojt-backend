@@ -5,13 +5,17 @@ exports.getAll = async (req, res) => {
 
     const years = await AcademicYearModel.getAll();
 
-    res.json(years);
+    res.json({
+      success: true,
+      academicYears: years
+    });
 
   } catch (err) {
 
     console.error(err);
 
     res.status(500).json({
+      success: false,
       error: err.message
     });
 
@@ -23,13 +27,17 @@ exports.getActive = async (req, res) => {
 
     const year = await AcademicYearModel.getActive();
 
-    res.json(year);
+    res.json({
+      success: true,
+      academicYear: year
+    });
 
   } catch (err) {
 
     console.error(err);
 
     res.status(500).json({
+      success: false,
       error: err.message
     });
 
