@@ -329,10 +329,11 @@ router.patch(
       const { status, remarks } = req.body;
 
       await LogModel.updateStatus(
-        req.params.id,
+        logId,
         status,
         remarks,
-        req.user.academic_year_id
+        req.user.academic_year_id,
+        req.user.user_id
       );
 
       res.json({
@@ -363,7 +364,8 @@ router.put(
         req.params.id,
         "approved",
         null,
-        req.user.academic_year_id
+        req.user.academic_year_id,
+        req.user.user_id
       );
 
       res.json({
@@ -396,7 +398,8 @@ router.put(
         req.params.id,
         "revision",
         feedback,
-        req.user.academic_year_id
+        req.user.academic_year_id,
+        req.user.user_id
       );
 
       res.json({
