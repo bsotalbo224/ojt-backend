@@ -497,7 +497,8 @@ class LogModel {
     log_id,
     status,
     remarks,
-    academic_year_id
+    academic_year_id,
+    coordinator_user_id
   ) {
 
     await db.query(`
@@ -579,7 +580,7 @@ class LogModel {
         )
         VALUES (?, ?, ?, 'system', ?)
       `, [
-        null,
+        coordinator_user_id,
         row.user_id,
         `Coordinator commented on your Daily Log (${row.log_date})`,
         log_id
