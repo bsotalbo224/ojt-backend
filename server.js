@@ -113,7 +113,6 @@ const uploadRoutes = require("./routes/upload");
 // core modules
 const adminRoutes = require("./routes/admin");
 const coordinatorRoutes = require("./routes/coordinators");
-const coordinatorStudentsRoutes = require("./routes/coordinatorStudents");
 
 const companyRoutes = require("./routes/companies");
 const studentRoutes = require("./routes/student");
@@ -225,7 +224,6 @@ app.use("/api/admin", adminRoutes);
 
 // coordinators
 app.use("/api/coordinators", coordinatorRoutes);
-app.use("/api/coordinators", coordinatorStudentsRoutes);
 
 // department-scoped
 app.use("/api/companies", coordinatorScope, companyRoutes);

@@ -11,26 +11,46 @@ DASHBOARD STATS
 ========================= */
 router.get("/stats", async (req, res) => {
   try {
-    const data = await CoordinatorModel.getDashboardStats(req.user.user_id);
+
+    const data =
+      await CoordinatorModel.getDashboardStats(
+        req.user.user_id,
+        req.user.academic_year_id
+      );
+
     res.json(data);
+
   } catch (err) {
+
     console.error("COORD STATS ERROR:", err);
-    res.status(500).json({ message: "Server error" });
+
+    res.status(500).json({
+      message: "Server error"
+    });
   }
 });
-
 
 /* =========================
 COORDINATOR STUDENTS
 ========================= */
-
 router.get("/students", async (req, res) => {
   try {
-    const data = await CoordinatorModel.getStudents(req.user.user_id);
+
+    const data =
+      await CoordinatorModel.getStudents(
+        req.user.user_id,
+        req.user.academic_year_id
+      );
+
     res.json(data);
+
   } catch (err) {
+
     console.error("COORD STUDENTS ERROR:", err);
-    res.status(500).json({ message: "Server error" });
+
+    res.status(500).json({
+      message: "Server error"
+    });
   }
 });
 
@@ -40,13 +60,22 @@ GET /api/coordinators/student-progress/:id
 ========================= */
 router.get("/student-progress/:id", async (req, res) => {
   try {
-    const data = await CoordinatorModel.getStudentProgress(
-      req.params.id
-    );
+
+    const data =
+      await CoordinatorModel.getStudentProgress(
+        req.params.id,
+        req.user.academic_year_id
+      );
+
     res.json(data);
+
   } catch (err) {
+
     console.error("COORD PROGRESS ERROR:", err);
-    res.status(500).json({ message: "Server error" });
+
+    res.status(500).json({
+      message: "Server error"
+    });
   }
 });
 
@@ -70,9 +99,12 @@ router.put("/students/:id/assign-company", async (req, res) => {
       end_time
     );
 
-    res.json({ success: true });
+    res.json({
+      success: true
+    });
 
   } catch (err) {
+
     console.error("ASSIGN COMPANY ERROR:", err);
 
     res.status(500).json({
@@ -91,11 +123,22 @@ router.get(
   requireRole("admin"),
   async (req, res) => {
     try {
-      const data = await CoordinatorModel.getAll();
+
+      const data =
+        await CoordinatorModel.getAll();
+
       res.json(data);
+
     } catch (err) {
-      console.error("GET COORDINATORS ERROR:", err);
-      res.status(500).json({ message: "Server error" });
+
+      console.error(
+        "GET COORDINATORS ERROR:",
+        err
+      );
+
+      res.status(500).json({
+        message: "Server error"
+      });
     }
   }
 );
@@ -110,11 +153,26 @@ router.post(
   requireRole("admin"),
   async (req, res) => {
     try {
-      const id = await CoordinatorModel.create(req.body);
-      res.status(201).json({ coordinator_id: id });
+
+      const id =
+        await CoordinatorModel.create(
+          req.body
+        );
+
+      res.status(201).json({
+        coordinator_id: id
+      });
+
     } catch (err) {
-      console.error("CREATE COORDINATOR ERROR:", err);
-      res.status(500).json({ message: "Server error" });
+
+      console.error(
+        "CREATE COORDINATOR ERROR:",
+        err
+      );
+
+      res.status(500).json({
+        message: "Server error"
+      });
     }
   }
 );
@@ -129,14 +187,25 @@ router.put(
   requireRole("admin"),
   async (req, res) => {
     try {
-      const updated = await CoordinatorModel.update(
-        req.params.id,
-        req.body
-      );
+
+      const updated =
+        await CoordinatorModel.update(
+          req.params.id,
+          req.body
+        );
+
       res.json(updated);
+
     } catch (err) {
-      console.error("UPDATE COORDINATOR ERROR:", err);
-      res.status(500).json({ message: "Server error" });
+
+      console.error(
+        "UPDATE COORDINATOR ERROR:",
+        err
+      );
+
+      res.status(500).json({
+        message: "Server error"
+      });
     }
   }
 );
@@ -151,14 +220,25 @@ router.patch(
   requireRole("admin"),
   async (req, res) => {
     try {
-      const updated = await CoordinatorModel.setStatus(
-        req.params.id,
-        req.body.is_active
-      );
+
+      const updated =
+        await CoordinatorModel.setStatus(
+          req.params.id,
+          req.body.is_active
+        );
+
       res.json(updated);
+
     } catch (err) {
-      console.error("STATUS COORDINATOR ERROR:", err);
-      res.status(500).json({ message: "Server error" });
+
+      console.error(
+        "STATUS COORDINATOR ERROR:",
+        err
+      );
+
+      res.status(500).json({
+        message: "Server error"
+      });
     }
   }
 );

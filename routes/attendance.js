@@ -16,7 +16,7 @@ router.get("/student", requireRole("student"), async (req, res) => {
 
     const studentId = req.user.student_id;
 
-    const data = await AttendanceModel.getToday(studentId);
+    const data = await AttendanceModel.getToday(studentId, req.user.academic_year_id);
 
     res.json(data);
 
@@ -38,7 +38,7 @@ router.get("/coordinator", requireRole("coordinator"), async (req, res) => {
 
     const deptId = req.user.department_id;
 
-    const data = await AttendanceModel.getByDepartment(deptId);
+    const data = await AttendanceModel.getByDepartment(deptId, req.user.academic_year_id);
 
     res.json(data);
 
@@ -66,7 +66,8 @@ router.get(
 
       const data =
         await AttendanceModel.getStudentAttendanceRecords(
-          studentId
+          studentId,
+          req.user.academic_year_id
         );
 
       res.json(data);
@@ -91,7 +92,7 @@ ADMIN: ALL ATTENDANCE
 router.get("/admin", requireRole("admin"), async (req, res) => {
   try {
 
-    const data = await AttendanceModel.getByDepartment(null);
+    const data = await AttendanceModel.getByDepartment(null, req.user.academic_year_id);
 
     res.json(data);
 
@@ -117,6 +118,7 @@ router.post("/timein", requireRole("student"), async (req, res) => {
 
     const id = await AttendanceModel.timeIn({
       student_id: studentId,
+      academic_year_id: req.user.academic_year_id,
       latitude,
       longitude
     });
@@ -144,7 +146,7 @@ router.patch("/lunch/start", requireRole("student"), async (req, res) => {
 
     const studentId = req.user.student_id;
 
-    await AttendanceModel.startLunchBreak(studentId);
+    await AttendanceModel.startLunchBreak(studentId, req.user.academic_year_id);
 
     res.json({
       success: true
@@ -168,7 +170,7 @@ router.patch("/lunch/end", requireRole("student"), async (req, res) => {
 
     const studentId = req.user.student_id;
 
-    await AttendanceModel.endLunchBreak(studentId);
+    await AttendanceModel.endLunchBreak(studentId, req.user.academic_year_id);
 
     res.json({
       success: true
@@ -192,7 +194,7 @@ router.patch("/timeout", requireRole("student"), async (req, res) => {
 
     const studentId = req.user.student_id;
 
-    await AttendanceModel.timeOutByStudent(studentId);
+    await AttendanceModel.timeOutByStudent(studentId, req.user.academic_year_id);
 
     res.json({
       success: true
@@ -217,10 +219,10 @@ router.get("/history", requireRole("student"), async (req, res) => {
     const studentId = req.user.student_id;
 
     const todayRow =
-      await AttendanceModel.getToday(studentId);
+      await AttendanceModel.getToday(studentId, req.user.academic_year_id);
 
     const historyRows =
-      await AttendanceModel.getStudentHistory(studentId);
+      await AttendanceModel.getStudentHistory(studentId, req.user.academic_year_id);
 
     // =========================
     // TODAY

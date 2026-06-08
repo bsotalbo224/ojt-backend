@@ -5,10 +5,22 @@ class AdminModel {
   // =========================
   // DASHBOARD STATS
   // =========================
-  static async getStats() {
-    const [[students]] = await db.query("SELECT COUNT(*) AS total FROM students");
-    const [[companies]] = await db.query("SELECT COUNT(*) AS total FROM companies");
-    const [[coordinators]] = await db.query("SELECT COUNT(*) AS total FROM coordinators");
+  static async getStats(academic_year_id) {
+
+    const [[students]] = await db.query(
+      `SELECT COUNT(*) AS total
+       FROM students
+       WHERE academic_year_id = ?`,
+      [academic_year_id]
+    );
+
+    const [[companies]] = await db.query(
+      "SELECT COUNT(*) AS total FROM companies"
+    );
+
+    const [[coordinators]] = await db.query(
+      "SELECT COUNT(*) AS total FROM coordinators"
+    );
 
     return {
       totalStudents: students.total,
@@ -20,7 +32,8 @@ class AdminModel {
   // =========================
   // STUDENTS OVERVIEW (FIXED HOURS)
   // =========================
-  static async getStudentsOverview() {
+  static async getStudentsOverview(academic_year_id) {
+
     const [rows] = await db.query(`
       SELECT
         s.student_id,
@@ -39,63 +52,75 @@ class AdminModel {
         MAX(COALESCE(s.ojt_hours_required, c.required_hours)) AS totalHours,
 
         IFNULL(
-        SUM(
-          (
-            -- Regular hours
+          SUM(
             (
-              IFNULL(
-              TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
-              0
-            )
-
-              -- subtract lunch duration if both exist
-              - IF(
-                  a.lunch_break_start IS NOT NULL
-                  AND a.lunch_break_end IS NOT NULL,
-
-                  TIME_TO_SEC(
-                    TIMEDIFF(
-                      a.lunch_break_end,
-                      a.lunch_break_start
-                    )
-                  ),
-
-                  -- fallback automatic lunch deduction
-                  IF(
-                    IFNULL(
-                    TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
-                    0
-                  ) >= 18000,
-                    3600,
-                    0
-                  )
+              (
+                IFNULL(
+                  TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
+                  0
                 )
-            )
 
-            -- Add OT
-            + IFNULL(
-                TIME_TO_SEC(
-                  TIMEDIFF(a.ot_time_out, a.ot_time_in)
-                ),
-                0
+                - IF(
+                    a.lunch_break_start IS NOT NULL
+                    AND a.lunch_break_end IS NOT NULL,
+
+                    TIME_TO_SEC(
+                      TIMEDIFF(
+                        a.lunch_break_end,
+                        a.lunch_break_start
+                      )
+                    ),
+
+                    IF(
+                      IFNULL(
+                        TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
+                        0
+                      ) >= 18000,
+                      3600,
+                      0
+                    )
+                  )
               )
-          ) / 3600
-        ),
-        0
-      ) AS hoursCompleted
+
+              + IFNULL(
+                  TIME_TO_SEC(
+                    TIMEDIFF(a.ot_time_out, a.ot_time_in)
+                  ),
+                  0
+                )
+            ) / 3600
+          ),
+          0
+        ) AS hoursCompleted
 
       FROM students s
-      JOIN users u ON s.user_id = u.user_id
-      LEFT JOIN courses c ON s.course_id = c.course_id
-      LEFT JOIN companies comp ON s.company_id = comp.company_id
-      LEFT JOIN coordinators coord ON s.department_id = coord.department_id
-      LEFT JOIN users cu ON coord.user_id = cu.user_id
-      LEFT JOIN attendance a ON s.student_id = a.student_id
+      JOIN users u
+        ON s.user_id = u.user_id
+
+      LEFT JOIN courses c
+        ON s.course_id = c.course_id
+
+      LEFT JOIN companies comp
+        ON s.company_id = comp.company_id
+
+      LEFT JOIN coordinators coord
+        ON s.department_id = coord.department_id
+
+      LEFT JOIN users cu
+        ON coord.user_id = cu.user_id
+
+      LEFT JOIN attendance a
+        ON s.student_id = a.student_id
+        AND a.academic_year_id = ?
+
+      WHERE s.academic_year_id = ?
 
       GROUP BY s.student_id
+
       ORDER BY MAX(u.l_name) ASC
+
       LIMIT 4
-    `);
+    `, [academic_year_id]);
 
     return rows;
   }
@@ -104,8 +129,9 @@ class AdminModel {
   // COORDINATORS LIST
   // =========================
   static async getCoordinators() {
+
     const [rows] = await db.query(`
-      SELECT 
+      SELECT
         c.coordinator_id,
         u.f_name,
         u.l_name,
@@ -113,10 +139,17 @@ class AdminModel {
         c.department_id,
         c.is_active,
         COUNT(s.student_id) AS assignedStudents
+
       FROM coordinators c
-      JOIN users u ON c.user_id = u.user_id
-      LEFT JOIN students s ON s.department_id = c.department_id
+
+      JOIN users u
+        ON c.user_id = u.user_id
+
+      LEFT JOIN students s
+        ON s.department_id = c.department_id
+
       GROUP BY c.coordinator_id
+
       ORDER BY u.l_name ASC
     `);
 
@@ -127,11 +160,25 @@ class AdminModel {
   // RECENT ACTIVITY
   // =========================
   static async getRecentActivity() {
+
     const [rows] = await db.query(`
-      SELECT notif_id, message, type, created_at
+      SELECT
+        notif_id,
+        message,
+        type,
+        created_at
+
       FROM notifications
-      WHERE type IN ('log', 'narrative', 'evaluation', 'coordinator')
+
+      WHERE type IN (
+        'log',
+        'narrative',
+        'evaluation',
+        'coordinator'
+      )
+
       ORDER BY created_at DESC
+
       LIMIT 4
     `);
 
@@ -142,17 +189,24 @@ class AdminModel {
   // ARCHIVED STUDENTS
   // =========================
   static async getArchivedStudents() {
+
     const [rows] = await db.query(`
-      SELECT 
+      SELECT
         sa.student_id,
         u.f_name,
         u.l_name,
         u.email,
         c.course_name,
         sa.archived_at
+
       FROM students_archive sa
-      JOIN users u ON sa.user_id = u.user_id
-      LEFT JOIN courses c ON sa.course_id = c.course_id
+
+      JOIN users u
+        ON sa.user_id = u.user_id
+
+      LEFT JOIN courses c
+        ON sa.course_id = c.course_id
+
       ORDER BY sa.archived_at DESC
     `);
 
@@ -167,13 +221,18 @@ class AdminModel {
     const conn = await db.getConnection();
 
     try {
+
       await conn.beginTransaction();
 
       const [[student]] = await conn.query(`
-        SELECT * FROM students_archive WHERE student_id = ?
+        SELECT *
+        FROM students_archive
+        WHERE student_id = ?
       `, [student_id]);
 
-      if (!student) throw new Error("Student not found");
+      if (!student) {
+        throw new Error("Student not found");
+      }
 
       await conn.query(`
         INSERT INTO students (
@@ -187,9 +246,13 @@ class AdminModel {
           department_id,
           course_id,
           start_time,
-          end_time
+          end_time,
+          academic_year_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+        VALUES (
+          ?, ?, ?, ?, ?, ?, 1,
+          ?, ?, ?, ?, ?
+        )
       `, [
         student.student_id,
         student.user_id,
@@ -200,20 +263,26 @@ class AdminModel {
         student.department_id,
         student.course_id,
         student.start_time,
-        student.end_time
+        student.end_time,
+        student.academic_year_id
       ]);
 
       await conn.query(`
-        DELETE FROM students_archive WHERE student_id = ?
+        DELETE FROM students_archive
+        WHERE student_id = ?
       `, [student_id]);
 
       await conn.commit();
 
     } catch (err) {
+
       await conn.rollback();
       throw err;
+
     } finally {
+
       conn.release();
+
     }
   }
 }

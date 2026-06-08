@@ -3,13 +3,15 @@ const bcrypt = require("bcrypt");
 const { generatePassword } = require("../utils/password");
 const { sendStudentCredentials } = require("../utils/mailer");
 const { sendNotification } = require("../services/notificationServices");
+const AcademicYearModel = require("./AcademicYearModel");
+
 
 class StudentModel {
 
   // =========================
   // ALL STUDENTS (admin)
   // =========================
-  static async getAll() {
+  static async getAll(academic_year_id) {
     const [rows] = await db.query(`
       SELECT 
         s.student_id,
@@ -26,8 +28,9 @@ class StudentModel {
       JOIN users u ON s.user_id = u.user_id
       LEFT JOIN courses c ON s.course_id = c.course_id
       LEFT JOIN companies comp ON s.company_id = comp.company_id
+      WHERE s.academic_year_id = ?
       ORDER BY u.l_name ASC
-    `);
+    `, [academic_year_id]);
 
     return rows;
   }
@@ -67,23 +70,34 @@ class StudentModel {
 
       const user_id = userRes.insertId;
 
+      const activeYear =
+        await AcademicYearModel.getActive();
+
+      if (!activeYear) {
+        throw new Error(
+          "No active academic year found"
+        );
+      }
+
       // create student
       const [studentRes] = await conn.query(
         `INSERT INTO students (
-          user_id,
-          course_id,
-          department_id,
-          company_id,
-          ojt_hours_required
-        )
-        VALUES (
-          ?, 
-          ?, 
-          (SELECT department_id FROM courses WHERE course_id = ?),
-          ?, 
-          ?
-        )`,
-        [user_id, finalCourseId, finalCourseId, company_id || null, finalHours]
+            user_id,
+            course_id,
+            department_id,
+            company_id,
+            ojt_hours_required,
+            academic_year_id
+          )
+          VALUES (
+            ?,
+            ?,
+            (SELECT department_id FROM courses WHERE course_id = ?),
+            ?,
+            ?,
+            ?
+          )`,
+        [user_id, finalCourseId, finalCourseId, company_id || null, finalHours, activeYear.academic_year_id]
       );
 
       await conn.commit();
@@ -203,7 +217,7 @@ class StudentModel {
   // =========================
   // STUDENTS BY COORDINATOR
   // =========================
-  static async getByCoordinator(user_id) {
+  static async getByCoordinator(user_id, academic_year_id) {
     const [rows] = await db.query(`
       SELECT 
         s.student_id,
@@ -224,19 +238,20 @@ class StudentModel {
       LEFT JOIN companies comp ON s.company_id = comp.company_id
       JOIN coordinators co ON co.department_id = c.department_id
       WHERE co.user_id = ?
+        AND s.academic_year_id = ?
       ORDER BY u.l_name ASC
-    `, [user_id]);
+    `, [user_id, academic_year_id]);
 
     return rows;
   }
 
-// =========================
-// STUDENT PROGRESS (coordinator)
-// =========================
-static async getStudentProgress(student_id) {
+  // =========================
+  // STUDENT PROGRESS (coordinator)
+  // =========================
+  static async getStudentProgress(student_id) {
 
-  // Student basic info
-  const [[student]] = await db.query(`
+    // Student basic info
+    const [[student]] = await db.query(`
     SELECT 
   s.student_id,
 
@@ -266,11 +281,11 @@ static async getStudentProgress(student_id) {
     WHERE s.student_id = ?
   `, [student_id]);
 
-  // =========================
-  // ATTENDANCE SUMMARY
-  // VERIFIED ONLY COUNTS
-  // =========================
-  const [[summary]] = await db.query(`
+    // =========================
+    // ATTENDANCE SUMMARY
+    // VERIFIED ONLY COUNTS
+    // =========================
+    const [[summary]] = await db.query(`
     SELECT
 
       COUNT(DISTINCT attendance_date)
@@ -354,11 +369,11 @@ static async getStudentProgress(student_id) {
     WHERE student_id = ?
   `, [student_id]);
 
-  // =========================
-  // RECENT ATTENDANCE
-  // KEEP FLAGGED VISIBLE
-  // =========================
-  const [recentAttendance] = await db.query(`
+    // =========================
+    // RECENT ATTENDANCE
+    // KEEP FLAGGED VISIBLE
+    // =========================
+    const [recentAttendance] = await db.query(`
     SELECT
 
       attendance_id,
@@ -439,24 +454,24 @@ static async getStudentProgress(student_id) {
     LIMIT 5
   `, [student_id]);
 
-  return {
-    student,
+    return {
+      student,
 
-    attendanceDays:
-      summary.attendanceDays || 0,
+      attendanceDays:
+        summary.attendanceDays || 0,
 
-    attendanceRecords:
-      summary.attendanceRecords || 0,
+      attendanceRecords:
+        summary.attendanceRecords || 0,
 
-    lastAttendance:
-      summary.lastAttendance,
+      lastAttendance:
+        summary.lastAttendance,
 
-    hoursCompleted:
-      summary.hoursCompleted || 0,
+      hoursCompleted:
+        summary.hoursCompleted || 0,
 
-    recentAttendance
-  };
-}
+      recentAttendance
+    };
+  }
 }
 
 module.exports = StudentModel;

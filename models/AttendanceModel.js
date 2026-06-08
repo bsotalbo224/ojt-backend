@@ -13,31 +13,41 @@ class AttendanceModel {
   // =========================
   // ACTIVE ATTENDANCE
   // =========================
-  static async getActiveAttendance(student_id) {
+  static async getActiveAttendance(
+    student_id,
+    academic_year_id
+  ) {
 
     const [[row]] = await db.query(`
     SELECT *
     FROM attendance
     WHERE student_id = ?
+    AND academic_year_id = ?
     AND attendance_date = CURDATE()
     AND (
       time_out IS NULL
       OR (
-        ot_time_in IS NOT NULL
+        time_out IS NOT NULL
+        AND ot_time_in IS NOT NULL
         AND ot_time_out IS NULL
       )
     )
     ORDER BY attendance_id DESC
     LIMIT 1
-  `, [student_id]);
+  `, [
+      student_id,
+      academic_year_id
+    ]);
 
     return row || null;
   }
-
   // =========================
   // STUDENT ATTENDANCE
   // =========================
-  static async getByStudent(student_id) {
+  static async getByStudent(
+    student_id,
+    academic_year_id
+  ) {
 
     const [rows] = await db.query(`
       SELECT 
@@ -63,10 +73,14 @@ class AttendanceModel {
       FROM attendance
 
       WHERE student_id = ?
+      AND academic_year_id = ?
 
       ORDER BY attendance_date DESC,
                attendance_id DESC
-    `, [student_id]);
+    `, [
+      student_id,
+      academic_year_id
+    ]);
 
     return rows;
   }
@@ -74,7 +88,7 @@ class AttendanceModel {
   // =========================
   // BY DEPARTMENT
   // =========================
-  static async getByDepartment(department_id) {
+  static async getByDepartment(department_id, academic_year_id) {
 
     let sql = `
       SELECT
@@ -119,12 +133,22 @@ class AttendanceModel {
 
       sql += `
         WHERE c.department_id = ?
+        AND a.academic_year_id = ?
       `;
 
-      return (await db.query(sql, [department_id]))[0];
+      return (await db.query(sql, [department_id, academic_year_id]))[0];
     }
 
-    return (await db.query(sql))[0];
+    sql += `
+    WHERE a.academic_year_id = ?
+  `;
+
+    return (
+      await db.query(
+        sql,
+        [academic_year_id]
+      )
+    )[0];
   }
 
   // =========================
@@ -171,18 +195,30 @@ class AttendanceModel {
   // =========================
   // TIME IN / START OT
   // =========================
-  static async timeIn({ student_id, latitude, longitude }) {
+  static async timeIn({
+    student_id,
+    academic_year_id,
+    latitude,
+    longitude
+  }) {
 
     const now = getPHTime();
 
-    const active = await this.getActiveAttendance(student_id);
+    const active =
+      await this.getActiveAttendance(
+        student_id,
+        academic_year_id
+      );
 
     // =========================
     // LOCATION CHECK
     // =========================
     let location_status = "flagged";
 
-    if (latitude && longitude) {
+    if (
+      latitude !== undefined &&
+      longitude !== undefined
+    ) {
 
       const [[location]] = await db.query(`
         SELECT latitude, longitude, radius_meters
@@ -230,16 +266,15 @@ class AttendanceModel {
       const [result] = await db.query(`
         INSERT INTO attendance (
           student_id,
+          academic_year_id,
           attendance_date,
-
           time_in,
-
           latitude,
           longitude,
-
           location_status
         )
         VALUES (
+          ?,
           ?,
           CURDATE(),
           ?,
@@ -249,6 +284,7 @@ class AttendanceModel {
         )
       `, [
         student_id,
+        academic_year_id,
         now,
         latitude ?? null,
         longitude ?? null,
@@ -301,12 +337,18 @@ class AttendanceModel {
   // =========================
   // START LUNCH
   // =========================
-  static async startLunchBreak(student_id) {
+  static async startLunchBreak(
+    student_id,
+    academic_year_id
+  ) {
 
     const now = getPHTime();
 
     const active =
-      await this.getActiveAttendance(student_id);
+      await this.getActiveAttendance(
+        student_id,
+        academic_year_id
+      );
 
     if (!active) {
       throw new Error("No active attendance");
@@ -348,12 +390,18 @@ class AttendanceModel {
   // =========================
   // END LUNCH
   // =========================
-  static async endLunchBreak(student_id) {
+  static async endLunchBreak(
+    student_id,
+    academic_year_id
+  ) {
 
     const now = getPHTime();
 
     const active =
-      await this.getActiveAttendance(student_id);
+      await this.getActiveAttendance(
+        student_id,
+        academic_year_id
+      );
 
     if (!active) {
       throw new Error("No active attendance");
@@ -384,12 +432,18 @@ class AttendanceModel {
   // =========================
   // TIME OUT / END OT
   // =========================
-  static async timeOutByStudent(student_id) {
+  static async timeOutByStudent(
+    student_id,
+    academic_year_id
+  ) {
 
     const now = getPHTime();
 
     const active =
-      await this.getActiveAttendance(student_id);
+      await this.getActiveAttendance(
+        student_id,
+        academic_year_id
+      );
 
     if (!active) {
       throw new Error("No active attendance");
@@ -413,7 +467,8 @@ class AttendanceModel {
       ]);
 
       await this.checkCompletionAndNotify(
-        student_id
+        student_id,
+        academic_year_id
       );
 
       return;
@@ -437,7 +492,8 @@ class AttendanceModel {
       ]);
 
       await this.checkCompletionAndNotify(
-        student_id
+        student_id,
+        academic_year_id
       );
 
       return;
@@ -451,7 +507,7 @@ class AttendanceModel {
   // =========================
   // HOURS COMPUTATION
   // =========================
-  static async getHoursByStudent(student_id) {
+  static async getHoursByStudent(student_id, academic_year_id) {
 
     const [[row]] = await db.query(`
       SELECT
@@ -510,10 +566,11 @@ class AttendanceModel {
       FROM attendance
 
       WHERE student_id = ?
+      AND academic_year_id = ?
       AND time_in IS NOT NULL
       AND time_out IS NOT NULL
       AND location_status = 'verified'
-    `, [student_id]);
+    `, [student_id, academic_year_id]);
 
     return row.hours || 0;
   }
@@ -521,7 +578,10 @@ class AttendanceModel {
   // =========================
   // COMPLETION CHECK
   // =========================
-  static async checkCompletionAndNotify(student_id) {
+  static async checkCompletionAndNotify(
+    student_id,
+    academic_year_id
+  ) {
 
     const [[row]] = await db.query(`
       SELECT
@@ -593,13 +653,17 @@ class AttendanceModel {
       LEFT JOIN attendance a
         ON s.student_id = a.student_id
         AND a.location_status = 'verified'
+        AND a.academic_year_id = ?
 
       WHERE s.student_id = ?
 
       GROUP BY
         s.user_id,
         s.ojt_hours_required
-    `, [student_id]);
+    `, [
+      academic_year_id,
+      student_id
+    ]);
 
     if (!row) return;
 
@@ -633,10 +697,13 @@ class AttendanceModel {
   // =========================
   // TODAY
   // =========================
-  static async getToday(student_id) {
-
+  static async getToday(student_id,
+    academic_year_id) {
     const active =
-      await this.getActiveAttendance(student_id);
+      await this.getActiveAttendance(
+        student_id,
+        academic_year_id
+      );
 
     if (active) {
 
@@ -682,11 +749,15 @@ class AttendanceModel {
       ON a.student_id = s.student_id
 
     WHERE a.student_id = ?
+    AND a.academic_year_id = ?
     AND a.attendance_date = CURDATE()
 
     ORDER BY a.attendance_id DESC
     LIMIT 1
-  `, [student_id]);
+  `, [
+      student_id,
+      academic_year_id
+    ]);
 
     return rows[0] || null;
   }
@@ -694,7 +765,10 @@ class AttendanceModel {
   // =========================
   // HISTORY
   // =========================
-  static async getStudentHistory(student_id) {
+  static async getStudentHistory(
+    student_id,
+    academic_year_id
+  ) {
 
     const [rows] = await db.query(`
     SELECT
@@ -718,11 +792,15 @@ class AttendanceModel {
       ON a.student_id = s.student_id
 
     WHERE a.student_id = ?
+    AND a.academic_year_id = ?
 
     ORDER BY
       a.attendance_date DESC,
       a.attendance_id DESC
-  `, [student_id]);
+  `, [
+      student_id,
+      academic_year_id
+    ]);
 
     return rows;
   }
@@ -753,7 +831,7 @@ class AttendanceModel {
   // COORDINATOR: STUDENT RECORDS
   // =========================
   static async getStudentAttendanceRecords(
-    student_id
+    student_id, academic_year_id
   ) {
 
     const [rows] = await db.query(`
@@ -792,11 +870,12 @@ class AttendanceModel {
       ON s.user_id = u.user_id
 
     WHERE a.student_id = ?
+    AND a.academic_year_id = ?
 
     ORDER BY
       a.attendance_date DESC,
       a.attendance_id DESC
-  `, [student_id]);
+  `, [student_id, academic_year_id]);
 
     return rows;
   }

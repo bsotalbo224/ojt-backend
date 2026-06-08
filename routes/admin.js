@@ -13,11 +13,22 @@ ADMIN DASHBOARD STATS
 =================================================== */
 router.get("/stats", async (req, res) => {
   try {
-    const stats = await AdminModel.getStats();
+
+    const { academic_year_id } = req.query;
+
+    const stats = await AdminModel.getStats(
+      academic_year_id
+    );
+
     res.json(stats);
+
   } catch (err) {
+
     console.error("ADMIN STATS ERROR:", err);
-    res.status(500).json({ message: "Server error" });
+
+    res.status(500).json({
+      message: "Server error"
+    });
   }
 });
 
@@ -26,11 +37,26 @@ STUDENTS OVERVIEW
 =================================================== */
 router.get("/students", async (req, res) => {
   try {
-    const data = await AdminModel.getStudentsOverview();
+
+    const { academic_year_id } = req.query;
+
+    const data =
+      await AdminModel.getStudentsOverview(
+        academic_year_id
+      );
+
     res.json(data);
+
   } catch (err) {
-    console.error("ADMIN STUDENTS ERROR:", err);
-    res.status(500).json({ message: "Server error" });
+
+    console.error(
+      "ADMIN STUDENTS ERROR:",
+      err
+    );
+
+    res.status(500).json({
+      message: "Server error"
+    });
   }
 });
 

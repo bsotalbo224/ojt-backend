@@ -167,7 +167,7 @@ class CoordinatorModel {
   // =========================
   // DASHBOARD STATS (coordinator)
   // =========================
-  static async getDashboardStats(coordinatorUserId) {
+  static async getDashboardStats(coordinatorUserId, academic_year_id) {
     // =========================
     // GET COORDINATOR DEPARTMENT
     // =========================
@@ -188,30 +188,34 @@ class CoordinatorModel {
     SELECT COUNT(*) AS totalStudents
     FROM students
     WHERE department_id = ?
-  `, [deptId]);
+    AND academic_year_id = ?
+  `, [deptId, academic_year_id]);
 
     const [[ongoing]] = await db.query(`
     SELECT COUNT(*) AS ongoing
     FROM students
     WHERE department_id = ?
     AND company_id IS NOT NULL
-  `, [deptId]);
+    AND academic_year_id = ?
+  `, [deptId, academic_year_id]);
 
     const [[submittedLogs]] = await db.query(`
     SELECT COUNT(*) AS submittedLogs
     FROM daily_logs dl
     JOIN students s ON s.student_id = dl.student_id
     WHERE s.department_id = ?
+    AND s.academic_year_id = ?
     AND dl.status = 'submitted'
-  `, [deptId]);
+  `, [deptId, academic_year_id]);
 
     const [[submittedNarratives]] = await db.query(`
     SELECT COUNT(*) AS submittedNarratives
     FROM narrative_reports n
     JOIN students s ON s.student_id = n.student_id
     WHERE s.department_id = ?
+    AND n.academic_year_id = ?
     AND n.status = 'submitted'
-  `, [deptId]);
+  `, [deptId, academic_year_id]);
 
     // =========================
     // FIXED HOURS CALCULATION
@@ -260,6 +264,7 @@ class CoordinatorModel {
       FROM attendance a
       JOIN students s2 ON s2.student_id = a.student_id
       WHERE s2.department_id = ?
+      AND a.academic_year_id = ?
       AND a.time_in IS NOT NULL
     ), 0) AS avgHoursLogged,
 
@@ -268,8 +273,9 @@ class CoordinatorModel {
       FROM students s3
       JOIN courses c ON c.course_id = s3.course_id
       WHERE s3.department_id = ?
+      AND s3.academic_year_id = ?
     ), 0) AS requiredHours
-`, [deptId, deptId]);
+`, [deptId, academic_year_id, deptId, academic_year_id]);
 
     // =========================
     // FLAGGED ATTENDANCE
@@ -279,8 +285,9 @@ class CoordinatorModel {
     FROM attendance a
     JOIN students s ON s.student_id = a.student_id
     WHERE s.department_id = ?
+    AND a.academic_year_id = ?
     AND a.location_status = 'flagged'
-  `, [deptId]);
+  `, [deptId, academic_year_id]);
 
     // =========================
     // RECENT ACTIVITY
@@ -296,6 +303,7 @@ class CoordinatorModel {
       JOIN students s ON s.student_id = dl.student_id
       JOIN users u ON u.user_id = s.user_id
       WHERE s.department_id = ?
+      AND s.academic_year_id = ?
       AND dl.status = 'submitted'
     )
     UNION ALL
@@ -309,11 +317,12 @@ class CoordinatorModel {
       JOIN students s ON s.student_id = nr.student_id
       JOIN users u ON u.user_id = s.user_id
       WHERE s.department_id = ?
+      AND s.academic_year_id = ?
       AND nr.status = 'submitted'
     )
     ORDER BY created_at DESC
     LIMIT 3
-  `, [deptId, deptId]);
+  `, [deptId, academic_year_id, deptId, academic_year_id]);
 
     // =========================
     // FINAL RETURN
@@ -335,7 +344,7 @@ class CoordinatorModel {
   // =========================
   // COORDINATOR STUDENTS
   // =========================
-  static async getStudents(coordinatorUserId) {
+  static async getStudents(coordinatorUserId, academic_year_id) {
 
     const [[coord]] = await db.query(`
     SELECT department_id
@@ -371,16 +380,18 @@ class CoordinatorModel {
     comp.company_name AS company,
 
     (
-      SELECT COUNT(*) 
+      SELECT COUNT(*)
       FROM daily_logs dl2
-      WHERE dl2.student_id = s.student_id 
+      WHERE dl2.student_id = s.student_id
+      AND dl2.academic_year_id = ?
       AND dl2.status = 'submitted'
     ) AS submitted_logs,
 
     (
-      SELECT COUNT(*) 
+      SELECT COUNT(*)
       FROM narrative_reports nr
-      WHERE nr.student_id = s.student_id 
+      WHERE nr.student_id = s.student_id
+      AND nr.academic_year_id = ?
       AND nr.status = 'submitted'
     ) AS submitted_narratives
 
@@ -434,17 +445,25 @@ class CoordinatorModel {
       )
     ) AS hours_completed
 
-  FROM attendance
+    FROM attendance
 
-  WHERE time_in IS NOT NULL
+    WHERE time_in IS NOT NULL
+    AND academic_year_id = ?
 
-  GROUP BY student_id
+    GROUP BY student_id
 
 ) a ON a.student_id = s.student_id
 
   WHERE s.department_id = ?
+  AND s.academic_year_id = ?
   ORDER BY u.l_name ASC
-`, [deptId]);
+`, [
+      academic_year_id,
+      academic_year_id,
+      academic_year_id,
+      deptId,
+      academic_year_id
+    ]);
 
     return rows;
   }
@@ -452,7 +471,7 @@ class CoordinatorModel {
   // =========================
   // STUDENT PROGRESS (attendance-based)
   // =========================
-  static async getStudentProgress(studentId) {
+  static async getStudentProgress(studentId, academic_year_id) {
 
     // student basic info
     const [[student]] = await db.query(`
@@ -469,7 +488,11 @@ class CoordinatorModel {
     LEFT JOIN courses cr ON cr.course_id = s.course_id
     LEFT JOIN companies comp ON comp.company_id = s.company_id
     WHERE s.student_id = ?
-  `, [studentId]);
+    AND s.academic_year_id = ?
+  `, [
+      studentId,
+      academic_year_id
+    ]);
 
     if (!student) return null;
 
@@ -519,7 +542,8 @@ class CoordinatorModel {
       MAX(attendance_date) AS last_attendance_date
     FROM attendance
     WHERE student_id = ?
-  `, [studentId]);
+    AND academic_year_id = ?
+  `, [studentId, academic_year_id]);
 
     // recent attendance (last 5)
     const [recent] = await db.query(`
@@ -533,9 +557,10 @@ class CoordinatorModel {
       ot_time_out
     FROM attendance
     WHERE student_id = ?
+    AND academic_year_id = ?
     ORDER BY attendance_date DESC
     LIMIT 5
-  `, [studentId]);
+  `, [studentId, academic_year_id]);
 
     return {
       student,

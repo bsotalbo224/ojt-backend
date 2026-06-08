@@ -114,10 +114,11 @@ let student_id = null;
 let coordinator_id = null;
 let department_id = null;
 let department = null;
+let academic_year_id = null;
 
 if (role === "student") {
   const [s] = await db.query(
-    `SELECT student_id, department_id, is_active
+    `SELECT student_id, department_id, is_active, academic_year_id
      FROM students
      WHERE user_id = ?`,
     [user.user_id]
@@ -132,24 +133,38 @@ if (role === "student") {
     }
     student_id = s[0].student_id;
     department_id = s[0].department_id;
+    academic_year_id = s[0].academic_year_id;
   }
-} else if (role === "coordinator") {
-  const [c] = await db.query(
-    `SELECT coordinator_id, department_id, is_active
-     FROM coordinators
-     WHERE user_id = ?`,
-    [user.user_id]
-  );
+} else if (role === "coordinator" || role === "admin") {
+  if (role === "coordinator") {
+    const [c] = await db.query(
+      `SELECT coordinator_id, department_id, is_active
+       FROM coordinators
+       WHERE user_id = ?`,
+      [user.user_id]
+    );
 
-  if (c.length) {
-    if (!c[0].is_active) {
-      return res.status(403).json({
-        success: false,
-        message: "Your account has been deactivated."
-      });
+    if (c.length) {
+      if (!c[0].is_active) {
+        return res.status(403).json({
+          success: false,
+          message: "Your account has been deactivated."
+        });
+      }
+      coordinator_id = c[0].coordinator_id;
+      department_id = c[0].department_id;
     }
-    coordinator_id = c[0].coordinator_id;
-    department_id = c[0].department_id;
+  }
+
+  const [activeAy] = await db.query(
+    `SELECT academic_year_id 
+     FROM academic_years 
+     WHERE is_active = TRUE 
+     LIMIT 1`
+  );
+  
+  if (activeAy.length) {
+    academic_year_id = activeAy[0].academic_year_id;
   }
 }
 
@@ -181,7 +196,8 @@ const token = jwt.sign(
     role,
     student_id,
     coordinator_id,
-    department_id
+    department_id,
+    academic_year_id
   },
   process.env.JWT_SECRET,
   { expiresIn: "8h" }
@@ -201,6 +217,7 @@ return res.status(200).json({
     student_id,
     coordinator_id,
     department,
+    academic_year_id,
     must_change_password: user.must_change_password
   },
 });
@@ -234,15 +251,17 @@ let student_id = null;
 let coordinator_id = null;
 let department_id = null;
 let department = null;
+let academic_year_id = req.user.academic_year_id || null;
 
 if (user_role === "student") {
   const [s] = await db.query(
-    `SELECT student_id, department_id FROM students WHERE user_id = ?`,
+    `SELECT student_id, department_id, academic_year_id FROM students WHERE user_id = ?`,
     [user_id]
   );
   if (s.length) {
     student_id = s[0].student_id;
     department_id = s[0].department_id;
+    academic_year_id = s[0].academic_year_id;
   }
 } else if (user_role === "coordinator") {
   const [c] = await db.query(
@@ -286,6 +305,7 @@ res.json({
     student_id,
     coordinator_id,
     department,
+    academic_year_id,
     must_change_password: user.must_change_password,
   }
 });

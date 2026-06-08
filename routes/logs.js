@@ -5,7 +5,6 @@ const LogModel = require("../models/LogModel");
 const { requireAuth } = require("../middleware/authMiddleware");
 const { requireRole } = require("../middleware/roleMiddleware");
 const upload = require("../middleware/uploadMiddleware");
-const path = require("path");
 
 // Protect all routes
 router.use(requireAuth);
@@ -18,27 +17,45 @@ router.get("/attachments/:id", async (req, res) => {
     const attachmentId = req.params.id;
     const user = req.user;
 
-    const file = await LogModel.getAttachmentById(attachmentId);
+    const file = await LogModel.getAttachmentById(
+      attachmentId,
+      req.user.academic_year_id
+    );
 
     if (!file) {
-      return res.status(404).json({ message: "File not found" });
+      return res.status(404).json({
+        message: "File not found"
+      });
     }
 
-    // Authorization
-    if (user.role === "student" && user.student_id !== file.student_id) {
-      return res.status(403).json({ message: "Forbidden" });
+    // Student access
+    if (
+      user.role === "student" &&
+      user.student_id !== file.student_id
+    ) {
+      return res.status(403).json({
+        message: "Forbidden"
+      });
     }
 
-    if (user.role === "coordinator" && user.department_id !== file.department_id) {
-      return res.status(403).json({ message: "Forbidden" });
+    // Coordinator access
+    if (
+      user.role === "coordinator" &&
+      user.department_id !== file.department_id
+    ) {
+      return res.status(403).json({
+        message: "Forbidden"
+      });
     }
 
-    // Cloudinary redirect
     return res.redirect(file.file_path);
 
   } catch (err) {
     console.error("ATTACHMENT ACCESS ERROR:", err);
-    res.status(500).json({ message: "Server error" });
+
+    res.status(500).json({
+      message: "Server error"
+    });
   }
 });
 
@@ -47,14 +64,25 @@ STUDENT: GET MY LOGS
 =================================================== */
 router.get("/", requireRole("student"), async (req, res) => {
   try {
-    const studentId = req.user.student_id;
-    const logs = await LogModel.getByStudent(studentId);
 
-    res.json({ success: true, logs });
+    const logs = await LogModel.getByStudent(
+      req.user.student_id,
+      req.user.academic_year_id
+    );
+
+    res.json({
+      success: true,
+      logs
+    });
 
   } catch (err) {
+
     console.error("STUDENT LOGS ERROR:", err);
-    res.status(500).json({ success: false, message: "Server error" });
+
+    res.status(500).json({
+      success: false,
+      message: "Server error"
+    });
   }
 });
 
@@ -63,7 +91,7 @@ STUDENT: CREATE LOG
 =================================================== */
 router.post("/", requireRole("student"), async (req, res) => {
   try {
-    const studentId = req.user.student_id;
+
     const { log_date, narrative } = req.body;
 
     if (!log_date || !narrative) {
@@ -74,15 +102,21 @@ router.post("/", requireRole("student"), async (req, res) => {
     }
 
     const id = await LogModel.create({
-      student_id: studentId,
+      student_id: req.user.student_id,
+      academic_year_id: req.user.academic_year_id,
       log_date,
       narrative
     });
 
-    res.json({ success: true, log_id: id });
+    res.json({
+      success: true,
+      log_id: id
+    });
 
   } catch (err) {
+
     console.error("CREATE LOG ERROR:", err);
+
     res.status(400).json({
       success: false,
       message: err.message || "Failed to create log"
@@ -95,8 +129,7 @@ STUDENT: UPDATE / RESUBMIT LOG
 =================================================== */
 router.put("/:id", requireRole("student"), async (req, res) => {
   try {
-    const logId = req.params.id;
-    const studentId = req.user.student_id;
+
     const { narrative } = req.body;
 
     if (!narrative) {
@@ -107,8 +140,9 @@ router.put("/:id", requireRole("student"), async (req, res) => {
     }
 
     const affected = await LogModel.updateByStudent(
-      logId,
-      studentId,
+      req.params.id,
+      req.user.student_id,
+      req.user.academic_year_id,
       { narrative }
     );
 
@@ -125,7 +159,9 @@ router.put("/:id", requireRole("student"), async (req, res) => {
     });
 
   } catch (err) {
+
     console.error("UPDATE LOG ERROR:", err);
+
     res.status(500).json({
       success: false,
       message: "Server error"
@@ -142,7 +178,7 @@ router.post(
   upload.array("files", 5),
   async (req, res) => {
     try {
-      const logId = req.params.id;
+
       const files = req.files;
 
       if (!files || files.length === 0) {
@@ -153,12 +189,14 @@ router.post(
       }
 
       for (const file of files) {
+
         await LogModel.addAttachment({
-          log_id: logId,
+          log_id: req.params.id,
           file_name: file.originalname,
           file_path: file.path,
           file_type: file.mimetype
         });
+
       }
 
       res.json({
@@ -167,7 +205,9 @@ router.post(
       });
 
     } catch (err) {
+
       console.error("ATTACHMENT ERROR:", err);
+
       res.status(500).json({
         success: false,
         message: "Upload failed"
@@ -179,106 +219,199 @@ router.post(
 /* ===================================================
 COORDINATOR: GET DEPARTMENT LOGS
 =================================================== */
-router.get("/coordinator", requireRole("coordinator"), async (req, res) => {
-  try {
-    const deptId = req.user.department_id;
-    const logs = await LogModel.getByDepartment(deptId);
-    res.json(logs);
+router.get(
+  "/coordinator",
+  requireRole("coordinator"),
+  async (req, res) => {
+    try {
 
-  } catch (err) {
-    console.error("COORDINATOR LOGS ERROR:", err);
-    res.status(500).json({ message: "Server error" });
+      const logs = await LogModel.getByDepartment(
+        req.user.department_id,
+        req.user.academic_year_id
+      );
+
+      res.json(logs);
+
+    } catch (err) {
+
+      console.error("COORDINATOR LOGS ERROR:", err);
+
+      res.status(500).json({
+        message: "Server error"
+      });
+    }
   }
-});
+);
 
 /* ===================================================
 ADMIN: ALL LOGS
 =================================================== */
-router.get("/admin", requireRole("admin"), async (req, res) => {
-  try {
-    const logs = await LogModel.getByDepartment(null);
-    res.json(logs);
+router.get(
+  "/admin",
+  requireRole("admin"),
+  async (req, res) => {
+    try {
 
-  } catch (err) {
-    console.error("ADMIN LOGS ERROR:", err);
-    res.status(500).json({ message: "Server error" });
+      const logs = await LogModel.getByDepartment(
+        null,
+        req.user.academic_year_id
+      );
+
+      res.json(logs);
+
+    } catch (err) {
+
+      console.error("ADMIN LOGS ERROR:", err);
+
+      res.status(500).json({
+        message: "Server error"
+      });
+    }
   }
-});
+);
 
 /* ===================================================
-GET SINGLE LOG (role-protected)
+GET SINGLE LOG
 =================================================== */
 router.get("/:id", async (req, res) => {
   try {
-    const logId = req.params.id;
-    const user = req.user;
 
-    const log = await LogModel.getById(logId);
+    const log = await LogModel.getById(
+      req.params.id,
+      req.user.academic_year_id
+    );
 
     if (!log) {
-      return res.status(404).json({ message: "Log not found" });
+      return res.status(404).json({
+        message: "Log not found"
+      });
     }
 
-    if (user.role === "student" && log.student_id !== user.student_id) {
-      return res.status(403).json({ message: "Forbidden" });
+    if (
+      req.user.role === "student" &&
+      log.student_id !== req.user.student_id
+    ) {
+      return res.status(403).json({
+        message: "Forbidden"
+      });
     }
 
-    if (user.role === "coordinator" && user.department_id !== log.department_id) {
-      return res.status(403).json({ message: "Forbidden" });
+    if (
+      req.user.role === "coordinator" &&
+      req.user.department_id !== log.department_id
+    ) {
+      return res.status(403).json({
+        message: "Forbidden"
+      });
     }
 
     res.json(log);
 
   } catch (err) {
+
     console.error("GET LOG ERROR:", err);
-    res.status(500).json({ message: "Server error" });
+
+    res.status(500).json({
+      message: "Server error"
+    });
   }
 });
 
 /* ===================================================
 COORDINATOR: REVIEW LOG
 =================================================== */
-router.patch("/:id/review", requireRole("coordinator"), async (req, res) => {
-  try {
-    const logId = req.params.id;
-    const { status, remarks } = req.body;
+router.patch(
+  "/:id/review",
+  requireRole("coordinator"),
+  async (req, res) => {
+    try {
 
-    await LogModel.updateStatus(logId, status, remarks);
-    res.json({ success: true });
+      const { status, remarks } = req.body;
 
-  } catch (err) {
-    console.error("LOG REVIEW ERROR:", err);
-    res.status(500).json({ message: "Server error" });
+      await LogModel.updateStatus(
+        req.params.id,
+        status,
+        remarks,
+        req.user.academic_year_id
+      );
+
+      res.json({
+        success: true
+      });
+
+    } catch (err) {
+
+      console.error("LOG REVIEW ERROR:", err);
+
+      res.status(500).json({
+        message: "Server error"
+      });
+    }
   }
-});
+);
 
 /* ===================================================
-COORDINATOR: APPROVE
+COORDINATOR: APPROVE LOG
 =================================================== */
-router.put("/:id/approve", requireRole("coordinator"), async (req, res) => {
-  try {
-    await LogModel.updateStatus(req.params.id, "approved", null);
-    res.json({ success: true });
+router.put(
+  "/:id/approve",
+  requireRole("coordinator"),
+  async (req, res) => {
+    try {
 
-  } catch (err) {
-    console.error("APPROVE LOG ERROR:", err);
-    res.status(500).json({ message: "Server error" });
+      await LogModel.updateStatus(
+        req.params.id,
+        "approved",
+        null,
+        req.user.academic_year_id
+      );
+
+      res.json({
+        success: true
+      });
+
+    } catch (err) {
+
+      console.error("APPROVE LOG ERROR:", err);
+
+      res.status(500).json({
+        message: "Server error"
+      });
+    }
   }
-});
+);
 
 /* ===================================================
-COORDINATOR: REJECT / REVISION
+COORDINATOR: REVISION
 =================================================== */
-router.put("/:id/reject", requireRole("coordinator"), async (req, res) => {
-  try {
-    const { feedback } = req.body;
-    await LogModel.updateStatus(req.params.id, "revision", feedback);
-    res.json({ success: true });
+router.put(
+  "/:id/reject",
+  requireRole("coordinator"),
+  async (req, res) => {
+    try {
 
-  } catch (err) {
-    console.error("REJECT LOG ERROR:", err);
-    res.status(500).json({ message: "Server error" });
+      const { feedback } = req.body;
+
+      await LogModel.updateStatus(
+        req.params.id,
+        "revision",
+        feedback,
+        req.user.academic_year_id
+      );
+
+      res.json({
+        success: true
+      });
+
+    } catch (err) {
+
+      console.error("REJECT LOG ERROR:", err);
+
+      res.status(500).json({
+        message: "Server error"
+      });
+    }
   }
-});
+);
 
 module.exports = router;
