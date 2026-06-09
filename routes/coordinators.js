@@ -11,6 +11,8 @@ DASHBOARD STATS
 ========================= */
 router.get("/stats", async (req, res) => {
   try {
+    console.log("COORD USER:", coordinatorUserId);
+  console.log("ACADEMIC YEAR:", academic_year_id);
 
     const data =
       await CoordinatorModel.getDashboardStats(
