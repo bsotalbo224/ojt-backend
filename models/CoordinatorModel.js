@@ -180,7 +180,6 @@ class CoordinatorModel {
     if (!coord) return null;
 
     const deptId = coord.department_id;
-    console.log("DEPARTMENT:", coord.department_id);
 
     // =========================
     // BASIC COUNTS
