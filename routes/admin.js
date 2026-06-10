@@ -40,7 +40,9 @@ STUDENTS OVERVIEW
 router.get("/students", async (req, res) => {
   try {
 
-    const { academic_year_id } = req.query;
+    const academic_year_id =
+      req.headers["x-academic-year-id"] ||
+      req.user.academic_year_id;
 
     const data =
       await AdminModel.getStudentsOverview(
