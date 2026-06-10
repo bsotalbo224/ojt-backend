@@ -120,7 +120,10 @@ class AdminModel {
       ORDER BY MAX(u.l_name) ASC
 
       LIMIT 4
-    `, [academic_year_id]);
+    `, [
+      academic_year_id,
+      academic_year_id
+    ]);
 
     return rows;
   }

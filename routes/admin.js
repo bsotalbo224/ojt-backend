@@ -14,7 +14,9 @@ ADMIN DASHBOARD STATS
 router.get("/stats", async (req, res) => {
   try {
 
-    const { academic_year_id } = req.query;
+    const academic_year_id =
+      req.headers["x-academic-year-id"] ||
+      req.user.academic_year_id;
 
     const stats = await AdminModel.getStats(
       academic_year_id
