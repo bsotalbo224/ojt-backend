@@ -143,7 +143,8 @@ class LogModel {
         title: "New Daily Log Submitted",
         message: "A student submitted a new daily OJT log.",
         type: "log",
-        link: "/coordinator/daily-logs"
+        link: "/coordinator/daily-logs",
+        academic_year_id: student.academic_year_id
       });
     }
 
@@ -482,7 +483,8 @@ class LogModel {
         title: "Revised Daily Log Submitted",
         message: "A student resubmitted a revised daily log.",
         type: "log",
-        link: "/coordinator/daily-logs"
+        link: "/coordinator/daily-logs",
+        academic_year_id
       });
 
     }
@@ -564,7 +566,8 @@ class LogModel {
       title,
       message,
       type: "feedback",
-      link
+      link,
+      academic_year_id
     });
 
     if (status === "revision") {

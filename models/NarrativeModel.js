@@ -236,7 +236,8 @@ class NarrativeModel {
           title: "Narrative Submitted",
           message: "A student submitted a narrative report.",
           type: "narrative",
-          link: "/coordinator/narratives"
+          link: "/coordinator/narratives",
+          academic_year_id
         });
 
       }
@@ -319,7 +320,8 @@ class NarrativeModel {
       title,
       message,
       type: "narrative",
-      link: `/student/narratives?revision=${id}`
+      link: `/student/narratives?revision=${id}`,
+      academic_year_id
     });
 
 

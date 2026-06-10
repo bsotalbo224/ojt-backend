@@ -79,7 +79,14 @@ router.get("/coordinators", async (req, res) => {
 
 router.get("/recent-activity", async (req, res) => {
   try {
-    const activities = await AdminModel.getRecentActivity();
+    const academic_year_id =
+      req.headers["x-academic-year-id"] ||
+      req.user.academic_year_id;
+
+    const activities =
+      await AdminModel.getRecentActivity(
+        academic_year_id
+      );
     res.json(activities);
   } catch (error) {
     console.error("Recent activity error:", error);

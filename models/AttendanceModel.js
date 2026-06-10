@@ -690,7 +690,8 @@ class AttendanceModel {
       message:
         "Congratulations! You have completed your required OJT hours.",
       type: "system",
-      link: "/student/progress"
+      link: "/student/progress",
+      academic_year_id
     });
   }
 

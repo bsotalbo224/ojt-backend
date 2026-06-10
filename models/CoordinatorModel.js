@@ -616,11 +616,15 @@ class CoordinatorModel {
 
     // Notify student
     const [[row]] = await db.query(`
-    SELECT s.user_id, comp.company_name
-    FROM students s
-    LEFT JOIN companies comp ON comp.company_id = s.company_id
-    WHERE s.student_id = ?
-  `, [studentId]);
+      SELECT
+        s.user_id,
+        s.academic_year_id,
+        comp.company_name
+      FROM students s
+      LEFT JOIN companies comp
+        ON comp.company_id = s.company_id
+      WHERE s.student_id = ?
+    `, [studentId]);
 
     if (row?.user_id) {
       await sendNotification({
@@ -628,7 +632,8 @@ class CoordinatorModel {
         title: "OJT Placement Assigned",
         message: `You have been assigned to ${row.company_name}.`,
         type: "placement",
-        link: "/student/dashboard"
+        link: "/student/dashboard",
+        academic_year_id: row.academic_year_id
       });
     }
 

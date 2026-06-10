@@ -162,31 +162,30 @@ class AdminModel {
   // =========================
   // RECENT ACTIVITY
   // =========================
-  static async getRecentActivity() {
+static async getRecentActivity(
+  academic_year_id
+) {
 
-    const [rows] = await db.query(`
-      SELECT
-        notif_id,
-        message,
-        type,
-        created_at
+  const [rows] = await db.query(`
+    SELECT
+      notif_id,
+      message,
+      type,
+      created_at
+    FROM notifications
+    WHERE type IN (
+      'log',
+      'narrative',
+      'evaluation',
+      'coordinator'
+    )
+    AND academic_year_id = ?
+    ORDER BY created_at DESC
+    LIMIT 4
+  `, [academic_year_id]);
 
-      FROM notifications
-
-      WHERE type IN (
-        'log',
-        'narrative',
-        'evaluation',
-        'coordinator'
-      )
-
-      ORDER BY created_at DESC
-
-      LIMIT 4
-    `);
-
-    return rows;
-  }
+  return rows;
+}
 
   // =========================
   // ARCHIVED STUDENTS

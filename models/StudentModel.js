@@ -108,7 +108,8 @@ class StudentModel {
         title: "OJT Account Created",
         message: `Welcome ${f_name}! Your OJT account is ready.`,
         type: "system",
-        link: "/student/dashboard"
+        link: "/student/dashboard",
+        academic_year_id: activeYear.academic_year_id
       });
 
       // email credentials
