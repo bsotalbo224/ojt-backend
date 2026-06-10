@@ -30,23 +30,39 @@ router.get("/assignment", requireRole("student"), studentController.getMyAssignm
 // ===================================================
 router.get("/", requireAuth, async (req, res) => {
   try {
+
+    const academic_year_id =
+      req.headers["x-academic-year-id"] ||
+      req.user.academic_year_id;
+
     let students;
 
     if (req.user.role === "admin") {
-      students = await StudentModel.getAll();
+      students = await StudentModel.getAll(
+        academic_year_id
+      );
     }
     else if (req.user.role === "coordinator") {
-      students = await StudentModel.getByCoordinator(req.user.user_id);
+      students = await StudentModel.getByCoordinator(
+        req.user.user_id,
+        academic_year_id
+      );
     }
     else {
-      return res.status(403).json({ message: "Forbidden" });
+      return res.status(403).json({
+        message: "Forbidden"
+      });
     }
 
     res.json(students);
 
   } catch (err) {
+
     console.error("GET STUDENTS ERROR:", err);
-    res.status(500).json({ message: "Server error" });
+
+    res.status(500).json({
+      message: "Server error"
+    });
   }
 });
 
