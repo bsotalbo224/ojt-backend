@@ -97,12 +97,17 @@ router.get("/unread-count", requireAuth, async (req, res) => {
       if (row) user_id = row.user_id;
     }
 
+    const academic_year_id =
+      req.headers["x-academic-year-id"] ||
+      req.user.academic_year_id;
+
     const [[countRow]] = await db.query(
       `SELECT COUNT(*) AS count
-       FROM notifications
-       WHERE user_id = ?
-       AND is_read = 0`,
-      [user_id]
+   FROM notifications
+   WHERE user_id = ?
+   AND academic_year_id = ?
+   AND is_read = 0`,
+      [user_id, academic_year_id]
     );
 
     res.json({ success: true, count: countRow.count });
