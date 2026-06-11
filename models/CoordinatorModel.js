@@ -290,13 +290,6 @@ SELECT
     END
   ) AS workingCount,
 
-  SUM(
-    CASE
-      WHEN lunch_break_start IS NOT NULL
-      AND lunch_break_end IS NULL
-      THEN 1 ELSE 0
-    END
-  ) AS onBreakCount,
 
   SUM(
     CASE
@@ -387,7 +380,6 @@ AND a.academic_year_id = ?
       flaggedAttendance: flaggedAttendance.flaggedAttendance || 0,
 
       workingCount: attendanceSummary.workingCount || 0,
-      onBreakCount: attendanceSummary.onBreakCount || 0,
       onMealCount: attendanceSummary.onMealCount || 0,
       otActiveCount: attendanceSummary.otActiveCount || 0,
       completedCount: attendanceSummary.completedCount || 0,
