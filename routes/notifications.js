@@ -10,15 +10,23 @@ router.get("/", requireAuth, async (req, res) => {
   try {
     const user_id = req.user.user_id;
 
+    const academic_year_id =
+      req.headers["x-academic-year-id"] ||
+      req.user.academic_year_id;
+
     const [notifs] = await db.query(
-      `SELECT * 
-       FROM notifications 
+      `SELECT *
+       FROM notifications
        WHERE user_id = ?
+       AND academic_year_id = ?
        ORDER BY created_at DESC`,
-      [user_id]
+      [user_id, academic_year_id]
     );
 
-    res.json({ success: true, notifications: notifs });
+    res.json({
+      success: true,
+      notifications: notifs
+    });
 
   } catch (err) {
     console.error("NOTIF FETCH ERROR:", err);
