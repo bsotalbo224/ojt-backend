@@ -277,6 +277,58 @@ class CoordinatorModel {
     ), 0) AS requiredHours
 `, [deptId, academic_year_id, deptId, academic_year_id]);
 
+    // ==========================
+    // ATTENDACE SUMMARY
+    // ==========================
+    const [[attendanceSummary]] = await db.query(`
+SELECT
+  SUM(
+    CASE
+      WHEN time_in IS NOT NULL
+      AND time_out IS NULL
+      THEN 1 ELSE 0
+    END
+  ) AS workingCount,
+
+  SUM(
+    CASE
+      WHEN lunch_break_start IS NOT NULL
+      AND lunch_break_end IS NULL
+      THEN 1 ELSE 0
+    END
+  ) AS onBreakCount,
+
+  SUM(
+    CASE
+      WHEN lunch_break_start IS NOT NULL
+      AND lunch_break_end IS NULL
+      THEN 1 ELSE 0
+    END
+  ) AS onMealCount,
+
+  SUM(
+    CASE
+      WHEN ot_time_in IS NOT NULL
+      AND ot_time_out IS NULL
+      THEN 1 ELSE 0
+    END
+  ) AS otActiveCount,
+
+  SUM(
+    CASE
+      WHEN time_out IS NOT NULL
+      THEN 1 ELSE 0
+    END
+  ) AS completedCount
+
+FROM attendance a
+JOIN students s
+  ON s.student_id = a.student_id
+
+WHERE s.department_id = ?
+AND a.academic_year_id = ?
+`, [deptId, academic_year_id]);
+
     // =========================
     // FLAGGED ATTENDANCE
     // =========================
@@ -333,6 +385,12 @@ class CoordinatorModel {
       submittedLogs: submittedLogs.submittedLogs || 0,
       submittedNarratives: submittedNarratives.submittedNarratives || 0,
       flaggedAttendance: flaggedAttendance.flaggedAttendance || 0,
+
+      workingCount: attendanceSummary.workingCount || 0,
+      onBreakCount: attendanceSummary.onBreakCount || 0,
+      onMealCount: attendanceSummary.onMealCount || 0,
+      otActiveCount: attendanceSummary.otActiveCount || 0,
+      completedCount: attendanceSummary.completedCount || 0,
 
       avgHoursLogged: hoursData.avgHoursLogged || 0,
       requiredHours: hoursData.requiredHours || 0,

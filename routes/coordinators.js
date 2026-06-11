@@ -12,6 +12,10 @@ DASHBOARD STATS
 router.get("/stats", async (req, res) => {
   try {
 
+    const academic_year_id =
+      req.headers["x-academic-year-id"] ||
+      req.user.academic_year_id;
+
     const data =
       await CoordinatorModel.getDashboardStats(
         req.user.user_id,
@@ -35,6 +39,10 @@ COORDINATOR STUDENTS
 ========================= */
 router.get("/students", async (req, res) => {
   try {
+
+    const academic_year_id =
+      req.headers["x-academic-year-id"] ||
+      req.user.academic_year_id;
 
     const data =
       await CoordinatorModel.getStudents(
@@ -60,6 +68,10 @@ GET /api/coordinators/student-progress/:id
 ========================= */
 router.get("/student-progress/:id", async (req, res) => {
   try {
+
+    const academic_year_id =
+      req.headers["x-academic-year-id"] ||
+      req.user.academic_year_id;
 
     const data =
       await CoordinatorModel.getStudentProgress(
