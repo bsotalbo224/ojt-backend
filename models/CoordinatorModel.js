@@ -217,6 +217,47 @@ class CoordinatorModel {
     AND n.status = 'submitted'
   `, [deptId, academic_year_id]);
 
+
+    // ========================
+    // SHIFT STATS
+    // ========================
+    const [[shiftStats]] = await db.query(`
+  SELECT
+    SUM(
+      CASE
+        WHEN TIME(start_time) <= '12:00:00'
+         AND TIME(end_time) >= '17:00:00'
+        THEN 1
+        ELSE 0
+      END
+    ) AS dayShiftCount,
+
+    SUM(
+      CASE
+        WHEN TIME(start_time) >= '17:00:00'
+        THEN 1
+        ELSE 0
+      END
+    ) AS nightShiftCount,
+
+    SUM(
+      CASE
+        WHEN TIMESTAMPDIFF(
+          HOUR,
+          CONCAT('2000-01-01 ', start_time),
+          CONCAT('2000-01-01 ', end_time)
+        ) <= 5
+        THEN 1
+        ELSE 0
+      END
+    ) AS halfDayCount
+
+  FROM students
+
+  WHERE department_id = ?
+  AND academic_year_id = ?
+`, [deptId, academic_year_id]);
+
     // =========================
     // FIXED HOURS CALCULATION
     // =========================
@@ -383,6 +424,10 @@ AND a.academic_year_id = ?
       onMealCount: attendanceSummary.onMealCount || 0,
       otActiveCount: attendanceSummary.otActiveCount || 0,
       completedCount: attendanceSummary.completedCount || 0,
+
+      dayShiftCount: shiftStats.dayShiftCount || 0,
+      nightShiftCount: shiftStats.nightShiftCount || 0,
+      halfDayCount: shiftStats.halfDayCount || 0,
 
       avgHoursLogged: hoursData.avgHoursLogged || 0,
       requiredHours: hoursData.requiredHours || 0,
