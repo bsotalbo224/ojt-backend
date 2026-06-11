@@ -12,20 +12,30 @@ const MessageModel = {
     const {
       messageType = "normal",
       relatedLogId = null,
-      relatedNarrativeId = null
+      relatedNarrativeId = null,
+      academicYearId = null
     } = options;
 
     const [result] = await db.execute(
       `INSERT INTO messages
-       (sender_id, receiver_id, message, message_type, related_log_id, related_narrative_id)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+     (
+       sender_id,
+       receiver_id,
+       message,
+       message_type,
+       related_log_id,
+       related_narrative_id,
+       academic_year_id
+     )
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
         senderId ?? null,
         receiverId,
         message,
         messageType,
         relatedLogId ?? null,
-        relatedNarrativeId ?? null
+        relatedNarrativeId ?? null,
+        academicYearId
       ]
     );
 
@@ -38,7 +48,11 @@ const MessageModel = {
   GET CONVERSATION BETWEEN USERS
   =================================
   */
-  async getConversation(user1, user2) {
+  async getConversation(
+    user1,
+    user2,
+    academic_year_id
+  ) {
 
     const [rows] = await db.execute(`
       SELECT
@@ -49,11 +63,21 @@ const MessageModel = {
       FROM messages m
       LEFT JOIN users u
         ON m.sender_id = u.user_id
-      WHERE (m.sender_id = ? AND m.receiver_id = ?)
-         OR (m.sender_id = ? AND m.receiver_id = ?)
-         OR (m.sender_id IS NULL AND m.receiver_id = ?)
+      WHERE (
+           (m.sender_id = ? AND m.receiver_id = ?)
+        OR (m.sender_id = ? AND m.receiver_id = ?)
+        OR (m.sender_id IS NULL AND m.receiver_id = ?)
+      )
+      AND m.academic_year_id = ?
       ORDER BY m.created_at ASC
-    `, [user1, user2, user2, user1, user1]);
+    `, [
+      user1,
+      user2,
+      user2,
+      user1,
+      user1,
+      academic_year_id
+    ]);
 
     return rows;
   },
@@ -81,11 +105,15 @@ const MessageModel = {
   GET CONVERSATION LIST
   =================================
   */
-async getConversations(userId, role) {
+  async getConversations(
+    userId,
+    role,
+    academic_year_id
+  ) {
 
-  if (role === "student") {
+    if (role === "student") {
 
-    const [rows] = await db.execute(`
+      const [rows] = await db.execute(`
       SELECT
         u.user_id,
         u.f_name,
@@ -108,17 +136,25 @@ async getConversations(userId, role) {
           OR
           (m.sender_id = ? AND m.receiver_id = u.user_id)
         )
+        AND m.academic_year_id = ?
       WHERE s.user_id = ?
+      AND s.academic_year_id = ?
       GROUP BY u.user_id
       ORDER BY last_message_time DESC, u.f_name ASC
-    `, [userId, userId, userId]);
+    `, [
+        userId,
+        userId,
+        academic_year_id,
+        userId,
+        academic_year_id
+      ]);
 
-    return rows;
-  }
+      return rows;
+    }
 
-  if (role === "coordinator" || role === "admin") {
+    if (role === "coordinator" || role === "admin") {
 
-    const [rows] = await db.execute(`
+      const [rows] = await db.execute(`
       SELECT
         u.user_id,
         u.f_name,
@@ -141,16 +177,24 @@ async getConversations(userId, role) {
           OR
           (m.sender_id = ? AND m.receiver_id = u.user_id)
         )
+        AND m.academic_year_id = ?
       WHERE c.user_id = ?
+      AND s.academic_year_id = ?
       GROUP BY u.user_id
       ORDER BY last_message_time DESC, u.f_name ASC
-    `, [userId, userId, userId]);
+    `, [
+        userId,
+        userId,
+        academic_year_id,
+        userId,
+        academic_year_id
+      ]);
 
-    return rows;
+      return rows;
+    }
+
+    return [];
   }
-
-  return [];
-}
 
 };
 

@@ -1,6 +1,6 @@
 const MessageModel = require("../models/messageModel");
 const { sendNotification } = require("../services/notificationServices");
-const {io} = require("../server");
+const { io } = require("../server");
 const db = require("../config/db");
 
 /*
@@ -12,6 +12,9 @@ exports.sendMessage = async (req, res) => {
   try {
 
     const senderId = req.user.user_id;
+    const academic_year_id =
+      req.headers["x-academic-year-id"] ||
+      req.user.academic_year_id;
 
     const {
       receiver_id,
@@ -46,7 +49,8 @@ exports.sendMessage = async (req, res) => {
       {
         messageType: message_type,
         relatedLogId: related_log_id,
-        relatedNarrativeId: related_narrative_id
+        relatedNarrativeId: related_narrative_id,
+        academicYearId: academic_year_id
       }
     );
 
@@ -124,7 +128,8 @@ exports.sendMessage = async (req, res) => {
       type: "message",
       title: "New Message",
       message: `${senderName} sent you a message`,
-      link
+      link,
+      academic_year_id
     });
 
     /*
@@ -164,11 +169,15 @@ exports.getConversation = async (req, res) => {
     /* ── AUTO MARK AS READ ── */
     await MessageModel.markAsRead(otherUser, currentUser);
 
+    const academic_year_id =
+      req.headers["x-academic-year-id"] ||
+      req.user.academic_year_id;
+
     const messages = await MessageModel.getConversation(
       currentUser,
-      otherUser
+      otherUser,
+      academic_year_id
     );
-
     res.json(messages);
 
   } catch (error) {
@@ -225,9 +234,14 @@ exports.getConversations = async (req, res) => {
     const userId = req.user.user_id;
     const role = req.user.role || [];
 
+    const academic_year_id =
+      req.headers["x-academic-year-id"] ||
+      req.user.academic_year_id;
+
     const conversations = await MessageModel.getConversations(
       userId,
-      role
+      role,
+      academic_year_id
     );
 
     res.json({
