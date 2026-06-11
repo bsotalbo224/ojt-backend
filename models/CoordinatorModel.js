@@ -167,15 +167,15 @@ class CoordinatorModel {
   // =========================
   // DASHBOARD STATS (coordinator)
   // =========================
-  static async getDashboardStats(coordinatorUserId, academic_year_id) {
+ static async getDashboardStats(coordinatorUserId, academic_year_id) {
     // =========================
     // GET COORDINATOR DEPARTMENT
     // =========================
     const [[coord]] = await db.query(`
-    SELECT department_id
-    FROM coordinators
-    WHERE user_id = ?
-  `, [coordinatorUserId]);
+      SELECT department_id
+      FROM coordinators
+      WHERE user_id = ?
+    `, [coordinatorUserId]);
 
     if (!coord) return null;
 
@@ -185,230 +185,370 @@ class CoordinatorModel {
     // BASIC COUNTS
     // =========================
     const [[students]] = await db.query(`
-    SELECT COUNT(*) AS totalStudents
-    FROM students
-    WHERE department_id = ?
-    AND academic_year_id = ?
-  `, [deptId, academic_year_id]);
+      SELECT COUNT(*) AS totalStudents
+      FROM students
+      WHERE department_id = ?
+      AND academic_year_id = ?
+    `, [deptId, academic_year_id]);
 
     const [[ongoing]] = await db.query(`
-    SELECT COUNT(*) AS ongoing
-    FROM students
-    WHERE department_id = ?
-    AND company_id IS NOT NULL
-    AND academic_year_id = ?
-  `, [deptId, academic_year_id]);
+      SELECT COUNT(*) AS ongoing
+      FROM students
+      WHERE department_id = ?
+      AND company_id IS NOT NULL
+      AND academic_year_id = ?
+    `, [deptId, academic_year_id]);
 
     const [[submittedLogs]] = await db.query(`
-    SELECT COUNT(*) AS submittedLogs
-    FROM daily_logs dl
-    JOIN students s ON s.student_id = dl.student_id
-    WHERE s.department_id = ?
-    AND s.academic_year_id = ?
-    AND dl.status = 'submitted'
-  `, [deptId, academic_year_id]);
+      SELECT COUNT(*) AS submittedLogs
+      FROM daily_logs dl
+      JOIN students s ON s.student_id = dl.student_id
+      WHERE s.department_id = ?
+      AND s.academic_year_id = ?
+      AND dl.status = 'submitted'
+    `, [deptId, academic_year_id]);
 
     const [[submittedNarratives]] = await db.query(`
-    SELECT COUNT(*) AS submittedNarratives
-    FROM narrative_reports n
-    JOIN students s ON s.student_id = n.student_id
-    WHERE s.department_id = ?
-    AND n.academic_year_id = ?
-    AND n.status = 'submitted'
-  `, [deptId, academic_year_id]);
-
+      SELECT COUNT(*) AS submittedNarratives
+      FROM narrative_reports n
+      JOIN students s ON s.student_id = n.student_id
+      WHERE s.department_id = ?
+      AND n.academic_year_id = ?
+      AND n.status = 'submitted'
+    `, [deptId, academic_year_id]);
 
     // ========================
     // SHIFT STATS
+    // Priority: Night (start >= 17:00) > Half-Day (duration <= 5h) > Day
+    // Each student belongs to exactly one category.
     // ========================
     const [[shiftStats]] = await db.query(`
-  SELECT
-    SUM(
-      CASE
-        WHEN TIME(start_time) <= '12:00:00'
-         AND TIME(end_time) >= '17:00:00'
-        THEN 1
-        ELSE 0
-      END
-    ) AS dayShiftCount,
+      SELECT
+        SUM(
+          CASE
+            WHEN TIME(start_time) >= '17:00:00'
+            THEN 1
+            ELSE 0
+          END
+        ) AS nightShiftCount,
 
-    SUM(
-      CASE
-        WHEN TIME(start_time) >= '17:00:00'
-        THEN 1
-        ELSE 0
-      END
-    ) AS nightShiftCount,
+        SUM(
+          CASE
+            WHEN TIME(start_time) < '17:00:00'
+              AND TIMESTAMPDIFF(
+                MINUTE,
+                CONCAT('2000-01-01 ', start_time),
+                CONCAT('2000-01-01 ', end_time)
+              ) <= 300
+            THEN 1
+            ELSE 0
+          END
+        ) AS halfDayCount,
 
-    SUM(
-      CASE
-        WHEN TIMESTAMPDIFF(
-          HOUR,
-          CONCAT('2000-01-01 ', start_time),
-          CONCAT('2000-01-01 ', end_time)
-        ) <= 5
-        THEN 1
-        ELSE 0
-      END
-    ) AS halfDayCount
+        SUM(
+          CASE
+            WHEN TIME(start_time) < '17:00:00'
+              AND TIMESTAMPDIFF(
+                MINUTE,
+                CONCAT('2000-01-01 ', start_time),
+                CONCAT('2000-01-01 ', end_time)
+              ) > 300
+            THEN 1
+            ELSE 0
+          END
+        ) AS dayShiftCount
 
-  FROM students
+      FROM students
+      WHERE department_id = ?
+      AND academic_year_id = ?
+    `, [deptId, academic_year_id]);
 
-  WHERE department_id = ?
-  AND academic_year_id = ?
-`, [deptId, academic_year_id]);
+    // =========================
+    // SHIFT HOURS ANALYTICS
+    // Same priority-based classification applied consistently.
+    // =========================
+    const [[shiftHours]] = await db.query(`
+      SELECT
+
+        /* NIGHT SHIFT: start >= 17:00 */
+        ROUND(AVG(
+          CASE
+            WHEN TIME(s.start_time) >= '17:00:00'
+            THEN
+              (
+                (
+                  IFNULL(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)), 0)
+
+                  - IF(
+                      a.lunch_break_start IS NOT NULL
+                      AND a.lunch_break_end IS NOT NULL,
+
+                      TIME_TO_SEC(TIMEDIFF(a.lunch_break_end, a.lunch_break_start)),
+
+                      IF(
+                        IFNULL(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)), 0) >= 18000,
+                        3600,
+                        0
+                      )
+                    )
+                )
+
+                + IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
+              ) / 3600
+          END
+        )) AS nightAvgHoursLogged,
+
+        /* HALF DAY: start < 17:00 AND scheduled duration <= 5 hours (300 min) */
+        ROUND(AVG(
+          CASE
+            WHEN TIME(s.start_time) < '17:00:00'
+              AND TIMESTAMPDIFF(
+                MINUTE,
+                CONCAT('2000-01-01 ', s.start_time),
+                CONCAT('2000-01-01 ', s.end_time)
+              ) <= 300
+            THEN
+              (
+                (
+                  IFNULL(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)), 0)
+
+                  - IF(
+                      a.lunch_break_start IS NOT NULL
+                      AND a.lunch_break_end IS NOT NULL,
+
+                      TIME_TO_SEC(TIMEDIFF(a.lunch_break_end, a.lunch_break_start)),
+
+                      IF(
+                        IFNULL(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)), 0) >= 18000,
+                        3600,
+                        0
+                      )
+                    )
+                )
+
+                + IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
+              ) / 3600
+          END
+        )) AS halfDayAvgHoursLogged,
+
+        /* DAY SHIFT: start < 17:00 AND scheduled duration > 5 hours (300 min) */
+        ROUND(AVG(
+          CASE
+            WHEN TIME(s.start_time) < '17:00:00'
+              AND TIMESTAMPDIFF(
+                MINUTE,
+                CONCAT('2000-01-01 ', s.start_time),
+                CONCAT('2000-01-01 ', s.end_time)
+              ) > 300
+            THEN
+              (
+                (
+                  IFNULL(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)), 0)
+
+                  - IF(
+                      a.lunch_break_start IS NOT NULL
+                      AND a.lunch_break_end IS NOT NULL,
+
+                      TIME_TO_SEC(TIMEDIFF(a.lunch_break_end, a.lunch_break_start)),
+
+                      IF(
+                        IFNULL(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)), 0) >= 18000,
+                        3600,
+                        0
+                      )
+                    )
+                )
+
+                + IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
+              ) / 3600
+          END
+        )) AS dayAvgHoursLogged
+
+      FROM attendance a
+      JOIN students s ON s.student_id = a.student_id
+
+      WHERE s.department_id = ?
+      AND a.academic_year_id = ?
+    `, [deptId, academic_year_id]);
+
+    // =========================
+    // SHIFT REQUIRED HOURS
+    // Same priority-based classification applied consistently.
+    // =========================
+    const [[shiftRequired]] = await db.query(`
+      SELECT
+
+        /* NIGHT SHIFT: start >= 17:00 */
+        ROUND(AVG(
+          CASE
+            WHEN TIME(s.start_time) >= '17:00:00'
+            THEN COALESCE(s.ojt_hours_required, c.required_hours)
+          END
+        )) AS nightRequiredHours,
+
+        /* HALF DAY: start < 17:00 AND scheduled duration <= 5 hours (300 min) */
+        ROUND(AVG(
+          CASE
+            WHEN TIME(s.start_time) < '17:00:00'
+              AND TIMESTAMPDIFF(
+                MINUTE,
+                CONCAT('2000-01-01 ', s.start_time),
+                CONCAT('2000-01-01 ', s.end_time)
+              ) <= 300
+            THEN COALESCE(s.ojt_hours_required, c.required_hours)
+          END
+        )) AS halfDayRequiredHours,
+
+        /* DAY SHIFT: start < 17:00 AND scheduled duration > 5 hours (300 min) */
+        ROUND(AVG(
+          CASE
+            WHEN TIME(s.start_time) < '17:00:00'
+              AND TIMESTAMPDIFF(
+                MINUTE,
+                CONCAT('2000-01-01 ', s.start_time),
+                CONCAT('2000-01-01 ', s.end_time)
+              ) > 300
+            THEN COALESCE(s.ojt_hours_required, c.required_hours)
+          END
+        )) AS dayRequiredHours
+
+      FROM students s
+      JOIN courses c ON c.course_id = s.course_id
+
+      WHERE s.department_id = ?
+      AND s.academic_year_id = ?
+    `, [deptId, academic_year_id]);
 
     // =========================
     // FIXED HOURS CALCULATION
     // =========================
     const [[hoursData]] = await db.query(`
-  SELECT 
-    COALESCE((
-      SELECT ROUND(AVG(
-        (
-          (
-            IFNULL(
-              TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
-              0
-            )
+      SELECT
+        COALESCE((
+          SELECT ROUND(AVG(
+            (
+              (
+                IFNULL(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)), 0)
 
-            - IF(
-                a.lunch_break_start IS NOT NULL
-                AND a.lunch_break_end IS NOT NULL,
+                - IF(
+                    a.lunch_break_start IS NOT NULL
+                    AND a.lunch_break_end IS NOT NULL,
 
-                TIME_TO_SEC(
-                  TIMEDIFF(
-                    a.lunch_break_end,
-                    a.lunch_break_start
+                    TIME_TO_SEC(TIMEDIFF(a.lunch_break_end, a.lunch_break_start)),
+
+                    IF(
+                      IFNULL(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)), 0) >= 18000,
+                      3600,
+                      0
+                    )
                   )
-                ),
-
-                IF(
-                  IFNULL(
-                    TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
-                    0
-                  ) >= 18000,
-                  3600,
-                  0
-                )
               )
-          )
 
-          + IFNULL(
-              TIME_TO_SEC(
-                TIMEDIFF(a.ot_time_out, a.ot_time_in)
-              ),
-              0
-            )
-        ) / 3600
-      ))
-      FROM attendance a
-      JOIN students s2 ON s2.student_id = a.student_id
-      WHERE s2.department_id = ?
-      AND a.academic_year_id = ?
-      AND a.time_in IS NOT NULL
-    ), 0) AS avgHoursLogged,
+              + IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
+            ) / 3600
+          ))
+          FROM attendance a
+          JOIN students s2 ON s2.student_id = a.student_id
+          WHERE s2.department_id = ?
+          AND a.academic_year_id = ?
+          AND a.time_in IS NOT NULL
+        ), 0) AS avgHoursLogged,
 
-    COALESCE((
-      SELECT ROUND(AVG(NULLIF(c.required_hours, 0)))
-      FROM students s3
-      JOIN courses c ON c.course_id = s3.course_id
-      WHERE s3.department_id = ?
-      AND s3.academic_year_id = ?
-    ), 0) AS requiredHours
-`, [deptId, academic_year_id, deptId, academic_year_id]);
+        COALESCE((
+          SELECT ROUND(AVG(NULLIF(c.required_hours, 0)))
+          FROM students s3
+          JOIN courses c ON c.course_id = s3.course_id
+          WHERE s3.department_id = ?
+          AND s3.academic_year_id = ?
+        ), 0) AS requiredHours
+    `, [deptId, academic_year_id, deptId, academic_year_id]);
 
     // ==========================
-    // ATTENDACE SUMMARY
+    // ATTENDANCE SUMMARY
     // ==========================
     const [[attendanceSummary]] = await db.query(`
-SELECT
-  SUM(
-    CASE
-      WHEN time_in IS NOT NULL
-      AND time_out IS NULL
-      THEN 1 ELSE 0
-    END
-  ) AS workingCount,
+      SELECT
+        SUM(
+          CASE
+            WHEN time_in IS NOT NULL AND time_out IS NULL
+            THEN 1 ELSE 0
+          END
+        ) AS workingCount,
 
+        SUM(
+          CASE
+            WHEN lunch_break_start IS NOT NULL AND lunch_break_end IS NULL
+            THEN 1 ELSE 0
+          END
+        ) AS onMealCount,
 
-  SUM(
-    CASE
-      WHEN lunch_break_start IS NOT NULL
-      AND lunch_break_end IS NULL
-      THEN 1 ELSE 0
-    END
-  ) AS onMealCount,
+        SUM(
+          CASE
+            WHEN ot_time_in IS NOT NULL AND ot_time_out IS NULL
+            THEN 1 ELSE 0
+          END
+        ) AS otActiveCount,
 
-  SUM(
-    CASE
-      WHEN ot_time_in IS NOT NULL
-      AND ot_time_out IS NULL
-      THEN 1 ELSE 0
-    END
-  ) AS otActiveCount,
+        SUM(
+          CASE
+            WHEN time_out IS NOT NULL
+            THEN 1 ELSE 0
+          END
+        ) AS completedCount
 
-  SUM(
-    CASE
-      WHEN time_out IS NOT NULL
-      THEN 1 ELSE 0
-    END
-  ) AS completedCount
+      FROM attendance a
+      JOIN students s ON s.student_id = a.student_id
 
-FROM attendance a
-JOIN students s
-  ON s.student_id = a.student_id
-
-WHERE s.department_id = ?
-AND a.academic_year_id = ?
-`, [deptId, academic_year_id]);
+      WHERE s.department_id = ?
+      AND a.academic_year_id = ?
+    `, [deptId, academic_year_id]);
 
     // =========================
     // FLAGGED ATTENDANCE
     // =========================
     const [[flaggedAttendance]] = await db.query(`
-    SELECT COUNT(*) AS flaggedAttendance
-    FROM attendance a
-    JOIN students s ON s.student_id = a.student_id
-    WHERE s.department_id = ?
-    AND a.academic_year_id = ?
-    AND a.location_status = 'flagged'
-  `, [deptId, academic_year_id]);
+      SELECT COUNT(*) AS flaggedAttendance
+      FROM attendance a
+      JOIN students s ON s.student_id = a.student_id
+      WHERE s.department_id = ?
+      AND a.academic_year_id = ?
+      AND a.location_status = 'flagged'
+    `, [deptId, academic_year_id]);
 
     // =========================
     // RECENT ACTIVITY
     // =========================
     const [recentActivity] = await db.query(`
-    (
-      SELECT 
-        u.f_name,
-        u.l_name,
-        'log' AS type,
-        dl.created_at
-      FROM daily_logs dl
-      JOIN students s ON s.student_id = dl.student_id
-      JOIN users u ON u.user_id = s.user_id
-      WHERE s.department_id = ?
-      AND s.academic_year_id = ?
-      AND dl.status = 'submitted'
-    )
-    UNION ALL
-    (
-      SELECT 
-        u.f_name,
-        u.l_name,
-        'narrative' AS type,
-        nr.created_at
-      FROM narrative_reports nr
-      JOIN students s ON s.student_id = nr.student_id
-      JOIN users u ON u.user_id = s.user_id
-      WHERE s.department_id = ?
-      AND s.academic_year_id = ?
-      AND nr.status = 'submitted'
-    )
-    ORDER BY created_at DESC
-    LIMIT 3
-  `, [deptId, academic_year_id, deptId, academic_year_id]);
+      (
+        SELECT
+          u.f_name,
+          u.l_name,
+          'log' AS type,
+          dl.created_at
+        FROM daily_logs dl
+        JOIN students s ON s.student_id = dl.student_id
+        JOIN users u ON u.user_id = s.user_id
+        WHERE s.department_id = ?
+        AND s.academic_year_id = ?
+        AND dl.status = 'submitted'
+      )
+      UNION ALL
+      (
+        SELECT
+          u.f_name,
+          u.l_name,
+          'narrative' AS type,
+          nr.created_at
+        FROM narrative_reports nr
+        JOIN students s ON s.student_id = nr.student_id
+        JOIN users u ON u.user_id = s.user_id
+        WHERE s.department_id = ?
+        AND s.academic_year_id = ?
+        AND nr.status = 'submitted'
+      )
+      ORDER BY created_at DESC
+      LIMIT 3
+    `, [deptId, academic_year_id, deptId, academic_year_id]);
 
     // =========================
     // FINAL RETURN
@@ -431,6 +571,14 @@ AND a.academic_year_id = ?
 
       avgHoursLogged: hoursData.avgHoursLogged || 0,
       requiredHours: hoursData.requiredHours || 0,
+
+      dayAvgHoursLogged: shiftHours.dayAvgHoursLogged || 0,
+      nightAvgHoursLogged: shiftHours.nightAvgHoursLogged || 0,
+      halfDayAvgHoursLogged: shiftHours.halfDayAvgHoursLogged || 0,
+
+      dayRequiredHours: shiftRequired.dayRequiredHours || 0,
+      nightRequiredHours: shiftRequired.nightRequiredHours || 0,
+      halfDayRequiredHours: shiftRequired.halfDayRequiredHours || 0,
 
       recentActivity: recentActivity || []
     };
