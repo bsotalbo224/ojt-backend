@@ -17,6 +17,8 @@ const storage = new CloudinaryStorage({
       folder = "ojt-system/daily_logs";
     } else if (req.originalUrl.includes("departments")) {
       folder = "ojt-system/departments";
+    } else if (req.originalUrl.includes("attendance")) {
+      folder = "ojt-system/early-attendance";
     }
 
     return {

@@ -199,7 +199,11 @@ class AttendanceModel {
     student_id,
     academic_year_id,
     latitude,
-    longitude
+    longitude,
+    early_reason,
+    early_attachment_url,
+    early_attachment_public_id,
+    early_attachment_name
   }) {
 
     const now = getPHTime();
@@ -259,37 +263,126 @@ class AttendanceModel {
     }
 
     // =========================
+    // EARLY ATTENDANCE CHECK (only for first time in)
+    // =========================
+    let early_attendance = false;
+    let early_status = null;
+    let early_reason_to_store = null;
+
+    if (!active) {
+      const [[student]] = await db.query(`
+    SELECT start_time
+    FROM students
+    WHERE student_id = ?
+    LIMIT 1
+  `, [student_id]);
+
+      const EARLY_THRESHOLD_MINUTES = 15;
+
+      if (student?.start_time) {
+        const toMinutes = (time) => {
+          const [h, m] = time.split(":").map(Number);
+          return h * 60 + m;
+        };
+
+        const scheduleMinutes = toMinutes(student.start_time);
+        const currentMinutes = toMinutes(now);
+
+        const diffMinutes = currentMinutes - scheduleMinutes;
+
+        if (diffMinutes < -EARLY_THRESHOLD_MINUTES) {
+          if (!early_reason) {
+            throw new Error("Reason is required for early attendance.");
+          }
+          early_attendance = true;
+          early_status = "pending";
+          early_reason_to_store = early_reason;
+        }
+      }
+    }
+
+    // =========================
     // FIRST TIME IN
     // =========================
     if (!active) {
 
       const [result] = await db.query(`
-        INSERT INTO attendance (
-          student_id,
-          academic_year_id,
-          attendance_date,
-          time_in,
-          latitude,
-          longitude,
-          location_status
-        )
-        VALUES (
-          ?,
-          ?,
-          CURDATE(),
-          ?,
-          ?,
-          ?,
-          ?
-        )
-      `, [
+    INSERT INTO attendance (
+      student_id,
+      academic_year_id,
+      attendance_date,
+      time_in,
+      latitude,
+      longitude,
+      location_status,
+      early_attendance,
+      early_reason,
+      early_status,
+      early_attachment_url,
+      early_attachment_public_id,
+      early_attachment_name
+    )
+    VALUES (?, ?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [
         student_id,
         academic_year_id,
         now,
         latitude ?? null,
         longitude ?? null,
-        location_status
+        location_status,
+        early_attendance,
+        early_reason_to_store,
+        early_status,
+        early_attachment_url ?? null,
+        early_attachment_public_id ?? null,
+        early_attachment_name ?? null
       ]);
+
+// =========================
+// NOTIFY COORDINATOR IF EARLY
+// =========================
+if (early_attendance) {
+  try {
+    const [[studentInfo]] = await db.query(`
+      SELECT
+        u.f_name,
+        u.l_name,
+        s.start_time,
+        cu.user_id AS coordinator_user_id
+      FROM students s
+      JOIN users u ON s.user_id = u.user_id
+      JOIN coordinators c ON s.department_id = c.department_id
+      JOIN users cu ON c.user_id = cu.user_id
+      WHERE s.student_id = ?
+      LIMIT 1
+    `, [student_id]);
+
+    if (studentInfo?.coordinator_user_id) {
+      const formatTime = (timeStr) => {
+        if (!timeStr) return "N/A";
+        const [h, m] = timeStr.split(":").map(Number);
+        const period = h >= 12 ? "PM" : "AM";
+        const hour = h % 12 || 12;
+        return `${hour}:${String(m).padStart(2, "0")} ${period}`;
+      };
+
+      const fullName = `${studentInfo.f_name} ${studentInfo.l_name}`;
+      const timeInFormatted = formatTime(now);
+      const scheduledFormatted = formatTime(studentInfo.start_time);
+
+      await sendNotification({
+        user_id: studentInfo.coordinator_user_id,
+        title: "Early Attendance Request",
+        message: `${fullName} submitted an early attendance request.\nTime In: ${timeInFormatted}\nScheduled Start: ${scheduledFormatted}`,
+        type: "system",
+        link: "/coordinator/early-attendance",
+        academic_year_id
+      });
+    }
+  } catch (error) {
+    console.error("Early attendance notification failed:", error);
+  }
+}
 
       return result.insertId;
     }
@@ -698,20 +791,12 @@ class AttendanceModel {
   // =========================
   // TODAY
   // =========================
-  static async getToday(student_id,
-    academic_year_id) {
-    const active =
-      await this.getActiveAttendance(
-        student_id,
-        academic_year_id
-      );
+  static async getToday(student_id, academic_year_id) {
+    const active = await this.getActiveAttendance(student_id, academic_year_id);
 
     if (active) {
-
       const [[student]] = await db.query(`
-      SELECT
-        start_time,
-        end_time
+      SELECT start_time, end_time
       FROM students
       WHERE student_id = ?
       LIMIT 1
@@ -719,12 +804,8 @@ class AttendanceModel {
 
       return {
         ...active,
-
-        start_time:
-          student?.start_time || null,
-
-        end_time:
-          student?.end_time || null
+        start_time: student?.start_time || null,
+        end_time: student?.end_time || null
       };
     }
 
@@ -741,6 +822,12 @@ class AttendanceModel {
       a.ot_time_in,
       a.ot_time_out,
 
+      a.early_attendance,
+      a.early_reason,
+      a.early_status,
+      a.early_attachment_url,
+      a.early_attachment_name,
+
       s.start_time,
       s.end_time
 
@@ -755,10 +842,7 @@ class AttendanceModel {
 
     ORDER BY a.attendance_id DESC
     LIMIT 1
-  `, [
-      student_id,
-      academic_year_id
-    ]);
+  `, [student_id, academic_year_id]);
 
     return rows[0] || null;
   }
@@ -766,10 +850,7 @@ class AttendanceModel {
   // =========================
   // HISTORY
   // =========================
-  static async getStudentHistory(
-    student_id,
-    academic_year_id
-  ) {
+  static async getStudentHistory(student_id, academic_year_id) {
 
     const [rows] = await db.query(`
     SELECT
@@ -783,6 +864,12 @@ class AttendanceModel {
 
       a.ot_time_in,
       a.ot_time_out,
+
+      a.early_attendance,
+      a.early_reason,
+      a.early_status,
+      a.early_attachment_url,
+      a.early_attachment_name,
 
       s.start_time,
       s.end_time
@@ -798,10 +885,7 @@ class AttendanceModel {
     ORDER BY
       a.attendance_date DESC,
       a.attendance_id DESC
-  `, [
-      student_id,
-      academic_year_id
-    ]);
+  `, [student_id, academic_year_id]);
 
     return rows;
   }
@@ -831,9 +915,7 @@ class AttendanceModel {
   // =========================
   // COORDINATOR: STUDENT RECORDS
   // =========================
-  static async getStudentAttendanceRecords(
-    student_id, academic_year_id
-  ) {
+  static async getStudentAttendanceRecords(student_id, academic_year_id) {
 
     const [rows] = await db.query(`
     SELECT
@@ -854,6 +936,12 @@ class AttendanceModel {
 
       a.location_status,
       a.coordinator_note,
+
+      a.early_attendance,
+      a.early_reason,
+      a.early_status,
+      a.early_attachment_url,
+      a.early_attachment_name,
 
       u.f_name,
       u.l_name,
@@ -877,6 +965,71 @@ class AttendanceModel {
       a.attendance_date DESC,
       a.attendance_id DESC
   `, [student_id, academic_year_id]);
+
+    return rows;
+  }
+
+  // =========================
+  // EARLY ATTENDANCE COORDINATOR METHODS
+  // =========================
+  static async approveEarlyAttendance(
+    attendance_id,
+    academic_year_id
+  ) {
+    await db.query(`
+      UPDATE attendance
+      SET early_status = 'approved'
+      WHERE attendance_id = ?
+      AND academic_year_id = ?
+    `, [attendance_id, academic_year_id]);
+
+    return { success: true };
+  }
+
+  static async rejectEarlyAttendance(
+    attendance_id,
+    academic_year_id
+  ) {
+    await db.query(`
+      UPDATE attendance
+      SET early_status = 'rejected'
+      WHERE attendance_id = ?
+      AND academic_year_id = ?
+    `, [attendance_id, academic_year_id]);
+
+    return { success: true };
+  }
+
+  static async getPendingEarlyAttendance(
+  academic_year_id,
+  department_id
+) {
+  const [rows] = await db.query(`
+    SELECT 
+      a.attendance_id,
+      a.student_id,
+      a.attendance_date,
+      a.time_in,
+      a.early_reason,
+      a.early_status,
+      a.early_attachment_url,
+      a.early_attachment_name,
+      s.start_time,
+      s.end_time,
+      u.f_name,
+      u.l_name,
+      u.photo
+    FROM attendance a
+    JOIN students s 
+      ON a.student_id = s.student_id
+    JOIN users u 
+      ON s.user_id = u.user_id
+    WHERE a.early_attendance = 1
+      AND a.early_status = 'pending'
+      AND a.academic_year_id = ?
+      AND s.department_id = ?
+    ORDER BY a.attendance_id DESC
+    `, [academic_year_id, department_id]);
 
     return rows;
   }

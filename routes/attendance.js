@@ -5,6 +5,7 @@ const AttendanceModel = require("../models/AttendanceModel");
 
 const { requireAuth } = require("../middleware/authMiddleware");
 const { requireRole } = require("../middleware/roleMiddleware");
+const upload = require("../middleware/uploadMiddleware");
 
 router.use(requireAuth);
 
@@ -109,34 +110,58 @@ router.get("/admin", requireRole("admin"), async (req, res) => {
 /* ===================================================
 STUDENT: TIME IN / START OT
 =================================================== */
-router.post("/timein", requireRole("student"), async (req, res) => {
-  try {
+router.post(
+  "/timein",
+  requireRole("student"),
+  upload.single("early_attachment"),
+  async (req, res) => {
+    try {
 
-    const studentId = req.user.student_id;
+      const studentId = req.user.student_id;
 
-    const { latitude, longitude } = req.body;
+      const {
+        latitude,
+        longitude,
+        early_reason
+      } = req.body;
 
-    const id = await AttendanceModel.timeIn({
-      student_id: studentId,
-      academic_year_id: req.user.academic_year_id,
-      latitude,
-      longitude
-    });
+      const file = req.file;
 
-    res.json({
-      success: true,
-      attendance_id: id
-    });
+      const id = await AttendanceModel.timeIn({
+        student_id: studentId,
+        academic_year_id: req.user.academic_year_id,
+        latitude,
+        longitude,
+        early_reason,
+        early_attachment_url: file?.path || null,
+        early_attachment_public_id: file?.filename || null,
+        early_attachment_name: file?.originalname || null
+      });
 
-  } catch (err) {
+      res.json({
+        success: true,
+        attendance_id: id
+      });
 
-    console.error("TIMEIN ERROR:", err);
+    } catch (err) {
 
-    res.status(500).json({
-      message: err.message || "Server error"
-    });
+      console.error("TIMEIN ERROR:", err);
+
+      if (
+        err.message === "Reason is required for early attendance." ||
+        err.message === "Attachment is required for early attendance."
+      ) {
+        return res.status(400).json({
+          message: err.message
+        });
+      }
+
+      res.status(500).json({
+        message: err.message || "Server error"
+      });
+    }
   }
-});
+);
 
 /* ===================================================
 STUDENT: START LUNCH BREAK
@@ -255,7 +280,25 @@ router.get("/history", requireRole("student"), async (req, res) => {
             todayRow.start_time,
 
           end_time:
-            todayRow.end_time
+            todayRow.end_time,
+
+          early_attendance:
+            todayRow.early_attendance,
+
+          early_reason:
+            todayRow.early_reason,
+
+          early_status:
+            todayRow.early_status,
+
+          early_attachment_url:
+            todayRow.early_attachment_url,
+
+          early_attachment_public_id:
+            todayRow.early_attachment_public_id,
+
+          early_attachment_name:
+            todayRow.early_attachment_name
         }
       : null;
 
@@ -289,7 +332,25 @@ router.get("/history", requireRole("student"), async (req, res) => {
         r.start_time,
 
       end_time:
-        r.end_time
+        r.end_time,
+
+      early_attendance:
+        r.early_attendance,
+
+      early_reason:
+        r.early_reason,
+
+      early_status:
+        r.early_status,
+
+      early_attachment_url:
+        r.early_attachment_url,
+
+      early_attachment_public_id:
+        r.early_attachment_public_id,
+
+      early_attachment_name:
+        r.early_attachment_name
     }));
 
     res.json({
@@ -339,6 +400,94 @@ router.put("/:id/location-status", requireRole("coordinator"), async (req, res) 
 
     res.status(500).json({
       message: "Failed to update location status"
+    });
+  }
+});
+
+/* ===================================================
+COORDINATOR: PENDING EARLY ATTENDANCE
+=================================================== */
+router.get("/pending-early", requireRole("coordinator"), async (req, res) => {
+  try {
+
+    const data = await AttendanceModel.getPendingEarlyAttendance(
+      req.user.academic_year_id,
+      req.user.department_id
+    );
+
+    res.json(data);
+
+  } catch (err) {
+
+    console.error(
+      "PENDING EARLY ATTENDANCE ERROR:",
+      err
+    );
+
+    res.status(500).json({
+      message: "Failed to fetch pending early attendance"
+    });
+  }
+});
+
+/* ===================================================
+COORDINATOR: APPROVE EARLY ATTENDANCE
+=================================================== */
+router.patch("/early/:attendanceId/approve", requireRole("coordinator"), async (req, res) => {
+  try {
+
+    const { attendanceId } = req.params;
+
+    await AttendanceModel.approveEarlyAttendance(
+      attendanceId,
+      req.user.academic_year_id
+    );
+
+    res.json({
+      success: true,
+      message: "Early attendance approved"
+    });
+
+  } catch (err) {
+
+    console.error(
+      "APPROVE EARLY ATTENDANCE ERROR:",
+      err
+    );
+
+    res.status(500).json({
+      message: "Server error"
+    });
+  }
+});
+
+/* ===================================================
+COORDINATOR: REJECT EARLY ATTENDANCE
+=================================================== */
+router.patch("/early/:attendanceId/reject", requireRole("coordinator"), async (req, res) => {
+  try {
+
+    const { attendanceId } = req.params;
+
+    await AttendanceModel.rejectEarlyAttendance(
+      attendanceId,
+      req.user.academic_year_id
+    );
+
+    res.json({
+      success: true,
+      message: "Early attendance rejected"
+    });
+
+  } catch (err) {
+
+    console.error(
+      "REJECT EARLY ATTENDANCE ERROR:",
+      err
+    );
+
+    res.status(500).json({
+      message: "Server error"
     });
   }
 });
