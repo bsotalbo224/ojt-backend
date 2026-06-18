@@ -375,7 +375,7 @@ if (early_attendance) {
         title: "Early Attendance Request",
         message: `${fullName} submitted an early attendance request.\nTime In: ${timeInFormatted}\nScheduled Start: ${scheduledFormatted}`,
         type: "system",
-        link: "/coordinator/early-attendance",
+        link: "/coordinator/attendance",
         academic_year_id
       });
     }
