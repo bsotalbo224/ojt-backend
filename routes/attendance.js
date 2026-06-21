@@ -10,6 +10,20 @@ const upload = require("../middleware/uploadMiddleware");
 router.use(requireAuth);
 
 /* ===================================================
+BUSINESS ERROR MESSAGES (expected, return 400 not 500)
+=================================================== */
+const BUSINESS_ERRORS = [
+  "No active attendance",
+  "Already timed in",
+  "Already timed out",
+  "Lunch break not started",
+  "Lunch break already started",
+  "Lunch break already ended",
+  "OT already started",
+  "Attendance already completed"
+];
+
+/* ===================================================
 STUDENT: MY ATTENDANCE (TODAY)
 =================================================== */
 router.get("/student", requireRole("student"), async (req, res) => {
@@ -181,6 +195,12 @@ router.patch("/lunch/start", requireRole("student"), async (req, res) => {
 
     console.error("LUNCH START ERROR:", err);
 
+    if (BUSINESS_ERRORS.includes(err.message)) {
+      return res.status(400).json({
+        message: err.message
+      });
+    }
+
     res.status(500).json({
       message: err.message || "Server error"
     });
@@ -205,6 +225,12 @@ router.patch("/lunch/end", requireRole("student"), async (req, res) => {
 
     console.error("LUNCH END ERROR:", err);
 
+    if (BUSINESS_ERRORS.includes(err.message)) {
+      return res.status(400).json({
+        message: err.message
+      });
+    }
+
     res.status(500).json({
       message: err.message || "Server error"
     });
@@ -228,6 +254,12 @@ router.patch("/timeout", requireRole("student"), async (req, res) => {
   } catch (err) {
 
     console.error("TIMEOUT ERROR:", err);
+
+    if (BUSINESS_ERRORS.includes(err.message)) {
+      return res.status(400).json({
+        message: err.message
+      });
+    }
 
     res.status(500).json({
       message: err.message || "Server error"
@@ -259,7 +291,7 @@ router.get("/history", requireRole("student"), async (req, res) => {
           date: todayRow.attendance_date,
 
           time_in:
-            todayRow.time_in,
+            todayRow.display_time_in ?? todayRow.time_in,
 
           lunch_break_start:
             todayRow.lunch_break_start,
@@ -311,7 +343,7 @@ router.get("/history", requireRole("student"), async (req, res) => {
       date: r.attendance_date,
 
       time_in:
-        r.time_in,
+        r.display_time_in ?? r.time_in,
 
       lunch_break_start:
         r.lunch_break_start,

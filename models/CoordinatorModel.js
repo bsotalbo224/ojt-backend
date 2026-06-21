@@ -4,6 +4,138 @@ const { generatePassword } = require("../utils/password");
 const { sendCoordinatorCredentials } = require("../utils/mailer");
 const { sendNotification } = require("../services/notificationServices");
 
+const ATTENDANCE_SECONDS_SQL = `
+  SELECT
+    dur.attendance_id,
+    dur.student_id,
+    dur.academic_year_id,
+    dur.attendance_date,
+    dur.location_status,
+    (
+      dur.work_seconds_raw
+      - CASE
+          WHEN dur.lunch_break_start IS NOT NULL
+           AND dur.lunch_break_end IS NOT NULL
+          THEN
+            CASE
+              WHEN dur.lunch_break_end >= dur.lunch_break_start
+              THEN TIME_TO_SEC(
+                     TIMEDIFF(
+                       dur.lunch_break_end,
+                       dur.lunch_break_start
+                     )
+                   )
+              ELSE TIME_TO_SEC(
+                     TIMEDIFF(
+                       ADDTIME(dur.lunch_break_end, '24:00:00'),
+                       dur.lunch_break_start
+                     )
+                   )
+            END
+          ELSE
+            IF(dur.work_seconds_raw >= 18000, 3600, 0)
+        END
+      + dur.ot_seconds
+    ) AS total_seconds
+
+  FROM (
+    SELECT
+      eti.attendance_id,
+      eti.student_id,
+      eti.academic_year_id,
+      eti.attendance_date,
+      eti.location_status,
+
+      IFNULL(
+        CASE
+          WHEN eti.time_out IS NULL
+           OR eti.effective_time_in IS NULL
+          THEN NULL
+
+          WHEN eti.time_out >= eti.effective_time_in
+          THEN TIME_TO_SEC(
+                 TIMEDIFF(eti.time_out, eti.effective_time_in)
+               )
+
+          ELSE TIME_TO_SEC(
+                 TIMEDIFF(
+                   ADDTIME(eti.time_out, '24:00:00'),
+                   eti.effective_time_in
+                 )
+               )
+        END,
+        0
+      ) AS work_seconds_raw,
+
+      IFNULL(
+        CASE
+          WHEN eti.ot_time_in IS NOT NULL
+           AND eti.ot_time_out IS NOT NULL
+          THEN
+            CASE
+              WHEN eti.ot_time_out >= eti.ot_time_in
+              THEN TIME_TO_SEC(
+                     TIMEDIFF(eti.ot_time_out, eti.ot_time_in)
+                   )
+              ELSE TIME_TO_SEC(
+                     TIMEDIFF(
+                       ADDTIME(eti.ot_time_out, '24:00:00'),
+                       eti.ot_time_in
+                     )
+                   )
+            END
+          ELSE 0
+        END,
+        0
+      ) AS ot_seconds,
+
+      eti.lunch_break_start,
+      eti.lunch_break_end
+
+    FROM (
+      SELECT
+        att.attendance_id,
+        att.student_id,
+        att.academic_year_id,
+        att.attendance_date,
+        att.location_status,
+        att.time_out,
+        att.lunch_break_start,
+        att.lunch_break_end,
+        att.ot_time_in,
+        att.ot_time_out,
+
+        CASE
+          WHEN att.early_attendance = 1
+           AND att.early_status = 'approved'
+          THEN att.time_in
+
+          WHEN (
+            (
+              stu.start_time < '18:00:00'
+              AND att.time_in < stu.start_time
+            )
+            OR
+            (
+              stu.start_time >= '18:00:00'
+              AND att.time_in >= '12:00:00'
+              AND att.time_in < stu.start_time
+            )
+          )
+          THEN stu.start_time
+
+          ELSE att.time_in
+        END AS effective_time_in
+
+      FROM attendance att
+
+      JOIN students stu
+        ON stu.student_id = att.student_id
+        AND stu.academic_year_id = att.academic_year_id
+    ) eti
+  ) dur
+`;
+
 class CoordinatorModel {
 
   // =========================
@@ -221,6 +353,7 @@ class CoordinatorModel {
     // SHIFT STATS
     // Priority: Night (start >= 17:00) > Half-Day (duration <= 5h) > Day
     // Each student belongs to exactly one category.
+    // (Scheduled shift classification — not attendance-derived, untouched)
     // ========================
     const [[shiftStats]] = await db.query(`
       SELECT
@@ -266,6 +399,8 @@ class CoordinatorModel {
     // =========================
     // SHIFT HOURS ANALYTICS
     // Same priority-based classification applied consistently.
+    // Uses ATTENDANCE_SECONDS_SQL — only verified, completed
+    // (total_seconds > 0) attendance counts toward the average.
     // =========================
     const [[shiftHours]] = await db.query(`
       SELECT
@@ -274,27 +409,7 @@ class CoordinatorModel {
         ROUND(AVG(
           CASE
             WHEN TIME(s.start_time) >= '17:00:00'
-            THEN
-              (
-                (
-                  IFNULL(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)), 0)
-
-                  - IF(
-                      a.lunch_break_start IS NOT NULL
-                      AND a.lunch_break_end IS NOT NULL,
-
-                      TIME_TO_SEC(TIMEDIFF(a.lunch_break_end, a.lunch_break_start)),
-
-                      IF(
-                        IFNULL(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)), 0) >= 18000,
-                        3600,
-                        0
-                      )
-                    )
-                )
-
-                + IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
-              ) / 3600
+            THEN ad.total_seconds / 3600
           END
         )) AS nightAvgHoursLogged,
 
@@ -307,27 +422,7 @@ class CoordinatorModel {
                 CONCAT('2000-01-01 ', s.start_time),
                 CONCAT('2000-01-01 ', s.end_time)
               ) <= 300
-            THEN
-              (
-                (
-                  IFNULL(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)), 0)
-
-                  - IF(
-                      a.lunch_break_start IS NOT NULL
-                      AND a.lunch_break_end IS NOT NULL,
-
-                      TIME_TO_SEC(TIMEDIFF(a.lunch_break_end, a.lunch_break_start)),
-
-                      IF(
-                        IFNULL(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)), 0) >= 18000,
-                        3600,
-                        0
-                      )
-                    )
-                )
-
-                + IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
-              ) / 3600
+            THEN ad.total_seconds / 3600
           END
         )) AS halfDayAvgHoursLogged,
 
@@ -340,40 +435,28 @@ class CoordinatorModel {
                 CONCAT('2000-01-01 ', s.start_time),
                 CONCAT('2000-01-01 ', s.end_time)
               ) > 300
-            THEN
-              (
-                (
-                  IFNULL(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)), 0)
-
-                  - IF(
-                      a.lunch_break_start IS NOT NULL
-                      AND a.lunch_break_end IS NOT NULL,
-
-                      TIME_TO_SEC(TIMEDIFF(a.lunch_break_end, a.lunch_break_start)),
-
-                      IF(
-                        IFNULL(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)), 0) >= 18000,
-                        3600,
-                        0
-                      )
-                    )
-                )
-
-                + IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
-              ) / 3600
+            THEN ad.total_seconds / 3600
           END
         )) AS dayAvgHoursLogged
 
-      FROM attendance a
-      JOIN students s ON s.student_id = a.student_id
+      FROM students s
+
+      JOIN (
+        ${ATTENDANCE_SECONDS_SQL}
+      ) ad
+        ON ad.student_id = s.student_id
+        AND ad.academic_year_id = s.academic_year_id
 
       WHERE s.department_id = ?
-      AND a.academic_year_id = ?
+      AND s.academic_year_id = ?
+      AND ad.location_status = 'verified'
+      AND ad.total_seconds > 0
     `, [deptId, academic_year_id]);
 
     // =========================
     // SHIFT REQUIRED HOURS
     // Same priority-based classification applied consistently.
+    // (Scheduled requirement, not attendance-derived — untouched)
     // =========================
     const [[shiftRequired]] = await db.query(`
       SELECT
@@ -421,37 +504,23 @@ class CoordinatorModel {
 
     // =========================
     // FIXED HOURS CALCULATION
+    // Uses ATTENDANCE_SECONDS_SQL — only verified, completed
+    // (total_seconds > 0) attendance counts toward the average.
     // =========================
     const [[hoursData]] = await db.query(`
       SELECT
         COALESCE((
-          SELECT ROUND(AVG(
-            (
-              (
-                IFNULL(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)), 0)
-
-                - IF(
-                    a.lunch_break_start IS NOT NULL
-                    AND a.lunch_break_end IS NOT NULL,
-
-                    TIME_TO_SEC(TIMEDIFF(a.lunch_break_end, a.lunch_break_start)),
-
-                    IF(
-                      IFNULL(TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)), 0) >= 18000,
-                      3600,
-                      0
-                    )
-                  )
-              )
-
-              + IFNULL(TIME_TO_SEC(TIMEDIFF(a.ot_time_out, a.ot_time_in)), 0)
-            ) / 3600
-          ))
-          FROM attendance a
-          JOIN students s2 ON s2.student_id = a.student_id
+          SELECT ROUND(AVG(ad.total_seconds / 3600))
+          FROM (
+            ${ATTENDANCE_SECONDS_SQL}
+          ) ad
+          JOIN students s2
+            ON s2.student_id = ad.student_id
+            AND s2.academic_year_id = ad.academic_year_id
           WHERE s2.department_id = ?
-          AND a.academic_year_id = ?
-          AND a.time_in IS NOT NULL
+          AND ad.academic_year_id = ?
+          AND ad.location_status = 'verified'
+          AND ad.total_seconds > 0
         ), 0) AS avgHoursLogged,
 
         COALESCE((
@@ -465,6 +534,7 @@ class CoordinatorModel {
 
     // ==========================
     // ATTENDANCE SUMMARY
+    // (Live-state counts, not hour math — untouched)
     // ==========================
     const [[attendanceSummary]] = await db.query(`
       SELECT
@@ -644,58 +714,17 @@ class CoordinatorModel {
   LEFT JOIN courses cr ON cr.course_id = s.course_id
 
   LEFT JOIN (
-  SELECT 
-    student_id,
-
-    ROUND(
-      SUM(
-        (
-          (
-            IFNULL(
-              TIME_TO_SEC(TIMEDIFF(time_out, time_in)),
-              0
-            )
-
-            - IF(
-                lunch_break_start IS NOT NULL
-                AND lunch_break_end IS NOT NULL,
-
-                TIME_TO_SEC(
-                  TIMEDIFF(
-                    lunch_break_end,
-                    lunch_break_start
-                  )
-                ),
-
-                IF(
-                  IFNULL(
-                    TIME_TO_SEC(TIMEDIFF(time_out, time_in)),
-                    0
-                  ) >= 18000,
-                  3600,
-                  0
-                )
-              )
-          )
-
-          + IFNULL(
-              TIME_TO_SEC(
-                TIMEDIFF(ot_time_out, ot_time_in)
-              ),
-              0
-            )
-        ) / 3600
-      )
-    ) AS hours_completed
-
-    FROM attendance
-
-    WHERE time_in IS NOT NULL
-    AND academic_year_id = ?
-
-    GROUP BY student_id
-
-) a ON a.student_id = s.student_id
+    SELECT
+      ad.student_id,
+      ROUND(SUM(ad.total_seconds) / 3600, 2) AS hours_completed
+    FROM (
+      ${ATTENDANCE_SECONDS_SQL}
+    ) ad
+    WHERE ad.academic_year_id = ?
+    AND ad.location_status = 'verified'
+    AND ad.total_seconds > 0
+    GROUP BY ad.student_id
+  ) a ON a.student_id = s.student_id
 
   WHERE s.department_id = ?
   AND s.academic_year_id = ?
@@ -713,13 +742,19 @@ class CoordinatorModel {
 
   // =========================
   // STUDENT PROGRESS (attendance-based)
+  //
+  // coordinatorUserId is optional: pass it to enforce that the
+  // requesting coordinator may only view students in their own
+  // department. Omit it (or pass null) for admin-initiated calls
+  // where the route layer has already authorized the request.
   // =========================
-  static async getStudentProgress(studentId, academic_year_id) {
+  static async getStudentProgress(studentId, academic_year_id, coordinatorUserId = null) {
 
     // student basic info
-    const [[student]] = await db.query(`
+    const [[studentRow]] = await db.query(`
     SELECT 
       s.student_id,
+      s.department_id,
       COALESCE(s.ojt_hours_required, cr.required_hours) AS required_hours,
       u.photo,
       cr.course_code AS course,
@@ -737,55 +772,57 @@ class CoordinatorModel {
       academic_year_id
     ]);
 
-    if (!student) return null;
+    if (!studentRow) return null;
+
+    // =========================
+    // COORDINATOR DEPARTMENT VALIDATION
+    // =========================
+    if (coordinatorUserId) {
+      const [[coord]] = await db.query(`
+        SELECT department_id
+        FROM coordinators
+        WHERE user_id = ?
+      `, [coordinatorUserId]);
+
+      if (!coord || coord.department_id !== studentRow.department_id) {
+        throw new Error("Unauthorized student access");
+      }
+    }
+
+    // strip department_id before returning — not part of the
+    // existing response shape, only needed for the check above
+    const { department_id, ...student } = studentRow;
 
     // attendance stats
+    // (record/day counts include all rows; hours_completed only
+    // counts verified, completed (total_seconds > 0) attendance)
     const [[stats]] = await db.query(`
-   SELECT
+    SELECT
       COUNT(*) AS attendance_records,
-      COUNT(DISTINCT attendance_date) AS attendance_days,
-      ROUND(SUM(
-(
-  (
-    IFNULL(
-      TIME_TO_SEC(TIMEDIFF(time_out, time_in)),
-      0
-    )
-
-    - IF(
-        lunch_break_start IS NOT NULL
-        AND lunch_break_end IS NOT NULL,
-
-        TIME_TO_SEC(
-          TIMEDIFF(
-            lunch_break_end,
-            lunch_break_start
-          )
-        ),
-
-        IF(
-          IFNULL(
-            TIME_TO_SEC(TIMEDIFF(time_out, time_in)),
-            0
-          ) >= 18000,
-          3600,
-          0
-        )
-      )
-  )
-
-  + IFNULL(
-      TIME_TO_SEC(
-        TIMEDIFF(ot_time_out, ot_time_in)
-      ),
-      0
-    )
-) / 3600
-)) AS hours_completed,
-      MAX(attendance_date) AS last_attendance_date
-    FROM attendance
-    WHERE student_id = ?
-    AND academic_year_id = ?
+      COUNT(
+        DISTINCT CASE
+          WHEN ad.location_status = 'verified'
+           AND ad.total_seconds > 0
+          THEN ad.attendance_date
+          ELSE NULL
+        END
+      ) AS attendance_days,
+      ROUND(
+        SUM(
+          CASE
+            WHEN ad.location_status = 'verified'
+             AND ad.total_seconds > 0
+            THEN ad.total_seconds
+            ELSE 0
+          END
+        ) / 3600
+      ) AS hours_completed,
+      MAX(ad.attendance_date) AS last_attendance_date
+    FROM (
+      ${ATTENDANCE_SECONDS_SQL}
+    ) ad
+    WHERE ad.student_id = ?
+    AND ad.academic_year_id = ?
   `, [studentId, academic_year_id]);
 
     // recent attendance (last 5)
@@ -822,8 +859,13 @@ class CoordinatorModel {
     studentId,
     companyId,
     start_time = "08:30:00",
-    end_time = "17:00:00"
+    end_time = "17:00:00",
+    academic_year_id
   ) {
+
+    if (!academic_year_id) {
+      throw new Error("academic_year_id is required");
+    }
 
     // Check if company exists and is ACTIVE
     const [[company]] = await db.query(
@@ -841,21 +883,27 @@ class CoordinatorModel {
       throw new Error("Cannot assign inactive company");
     }
 
-    // Assign company
-    await db.query(
+    // Assign company (scoped to this academic year's enrollment record)
+    const [result] = await db.query(
       `UPDATE students
         SET 
           company_id = ?,
           start_time = ?,
           end_time = ?
-        WHERE student_id = ?`,
+        WHERE student_id = ?
+        AND academic_year_id = ?`,
       [
         companyId,
         start_time,
         end_time,
-        studentId
+        studentId,
+        academic_year_id
       ]
     );
+
+    if (result.affectedRows === 0) {
+      throw new Error("Student not found for current academic year");
+    }
 
     // Notify student
     const [[row]] = await db.query(`
@@ -867,7 +915,8 @@ class CoordinatorModel {
       LEFT JOIN companies comp
         ON comp.company_id = s.company_id
       WHERE s.student_id = ?
-    `, [studentId]);
+      AND s.academic_year_id = ?
+    `, [studentId, academic_year_id]);
 
     if (row?.user_id) {
       await sendNotification({

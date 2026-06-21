@@ -8,6 +8,15 @@ function getPHTime() {
   });
 }
 
+// Safe numeric time comparison helper.
+// Converts a "HH:MM" or "HH:MM:SS" string into total minutes so time
+// values can be compared reliably instead of relying on string
+// comparison (which breaks on inconsistent zero-padding/formats).
+function toMinutes(time) {
+  const [h, m] = String(time).split(":").map(Number);
+  return h * 60 + m;
+}
+
 class AttendanceModel {
 
   // =========================
@@ -23,7 +32,6 @@ class AttendanceModel {
     FROM attendance
     WHERE student_id = ?
     AND academic_year_id = ?
-    AND attendance_date = CURDATE()
     AND (
       time_out IS NULL
       OR (
@@ -264,6 +272,11 @@ class AttendanceModel {
 
     // =========================
     // EARLY ATTENDANCE CHECK (only for first time in)
+    // No threshold: ANY time_in earlier than start_time is early.
+    // Shift-aware: night shifts (start_time >= 6 PM) roll over past
+    // midnight, so a time_in in the early-morning hours (12:00 AM-11:59 AM)
+    // belongs to the shift that already started the previous evening and
+    // must NOT be flagged as early.
     // =========================
     let early_attendance = false;
     let early_status = null;
@@ -277,22 +290,36 @@ class AttendanceModel {
     LIMIT 1
   `, [student_id]);
 
-      const EARLY_THRESHOLD_MINUTES = 15;
-
       if (student?.start_time) {
-        const toMinutes = (time) => {
-          const [h, m] = time.split(":").map(Number);
-          return h * 60 + m;
-        };
-
         const scheduleMinutes = toMinutes(student.start_time);
         const currentMinutes = toMinutes(now);
 
-        const diffMinutes = currentMinutes - scheduleMinutes;
+        // Night shift = scheduled start at or after 6:00 PM (18 * 60).
+        const isNightShift = scheduleMinutes >= 18 * 60;
 
-        if (diffMinutes < -EARLY_THRESHOLD_MINUTES) {
+        let isEarly = false;
+
+        if (isNightShift) {
+          // For night shift:
+          // 12:00 AM-11:59 AM belongs to next calendar day,
+          // so it should NOT be treated as early.
+          if (currentMinutes >= 0 && currentMinutes < 12 * 60) {
+            isEarly = false;
+          } else {
+            isEarly = currentMinutes < scheduleMinutes;
+          }
+        } else {
+          // Day shift
+          isEarly = currentMinutes < scheduleMinutes;
+        }
+
+        // Any time_in earlier than start_time (even by 1 minute) is early.
+        if (isEarly) {
           if (!early_reason) {
             throw new Error("Reason is required for early attendance.");
+          }
+          if (!early_attachment_url) {
+            throw new Error("Attachment is required for early attendance.");
           }
           early_attendance = true;
           early_status = "pending";
@@ -600,6 +627,16 @@ if (early_attendance) {
   // =========================
   // HOURS COMPUTATION
   // =========================
+  // EFFECTIVE TIME RULE:
+  //   - early_attendance = 1 AND early_status = 'approved'  -> use actual a.time_in
+  //   - a.time_in earlier than s.start_time, accounting for night shifts
+  //     (pending / rejected / any other state) -> use s.start_time
+  //     Day shift:   start_time < 18:00 AND time_in < start_time
+  //     Night shift: start_time >= 18:00 AND time_in >= 12:00 AND time_in < start_time
+  //     (a night-shift time_in in the 12:00 AM-11:59 AM window is treated
+  //     as a continuation of the previous evening's shift, NOT early)
+  //   - otherwise -> use actual a.time_in
+  // This guarantees early minutes are NEVER counted unless explicitly approved.
   static async getHoursByStudent(student_id, academic_year_id) {
 
     const [[row]] = await db.query(`
@@ -610,19 +647,40 @@ if (early_attendance) {
               (
                 IFNULL(
                   TIME_TO_SEC(
-                    TIMEDIFF(time_out, time_in)
+                    TIMEDIFF(
+                      a.time_out,
+                      CASE
+                        WHEN a.early_attendance = 1
+                         AND a.early_status = 'approved'
+                        THEN a.time_in
+                        WHEN (
+                          (
+                            s.start_time < '18:00:00'
+                            AND a.time_in < s.start_time
+                          )
+                          OR
+                          (
+                            s.start_time >= '18:00:00'
+                            AND a.time_in >= '12:00:00'
+                            AND a.time_in < s.start_time
+                          )
+                        )
+                        THEN s.start_time
+                        ELSE a.time_in
+                      END
+                    )
                   ),
                   0
                 )
 
                 - IF(
-                    lunch_break_start IS NOT NULL
-                    AND lunch_break_end IS NOT NULL,
+                    a.lunch_break_start IS NOT NULL
+                    AND a.lunch_break_end IS NOT NULL,
 
                     TIME_TO_SEC(
                       TIMEDIFF(
-                        lunch_break_end,
-                        lunch_break_start
+                        a.lunch_break_end,
+                        a.lunch_break_start
                       )
                     ),
 
@@ -630,8 +688,26 @@ if (early_attendance) {
                       IFNULL(
                         TIME_TO_SEC(
                           TIMEDIFF(
-                            time_out,
-                            time_in
+                            a.time_out,
+                            CASE
+                              WHEN a.early_attendance = 1
+                               AND a.early_status = 'approved'
+                              THEN a.time_in
+                              WHEN (
+                                (
+                                  s.start_time < '18:00:00'
+                                  AND a.time_in < s.start_time
+                                )
+                                OR
+                                (
+                                  s.start_time >= '18:00:00'
+                                  AND a.time_in >= '12:00:00'
+                                  AND a.time_in < s.start_time
+                                )
+                              )
+                              THEN s.start_time
+                              ELSE a.time_in
+                            END
                           )
                         ),
                         0
@@ -645,8 +721,8 @@ if (early_attendance) {
               + IFNULL(
                   TIME_TO_SEC(
                     TIMEDIFF(
-                      ot_time_out,
-                      ot_time_in
+                      a.ot_time_out,
+                      a.ot_time_in
                     )
                   ),
                   0
@@ -656,13 +732,16 @@ if (early_attendance) {
           0
         ) AS hours
 
-      FROM attendance
+      FROM attendance a
 
-      WHERE student_id = ?
-      AND academic_year_id = ?
-      AND time_in IS NOT NULL
-      AND time_out IS NOT NULL
-      AND location_status = 'verified'
+      JOIN students s
+        ON a.student_id = s.student_id
+
+      WHERE a.student_id = ?
+      AND a.academic_year_id = ?
+      AND a.time_in IS NOT NULL
+      AND a.time_out IS NOT NULL
+      AND a.location_status = 'verified'
     `, [student_id, academic_year_id]);
 
     return row.hours || 0;
@@ -671,6 +750,8 @@ if (early_attendance) {
   // =========================
   // COMPLETION CHECK
   // =========================
+  // Uses the same EFFECTIVE TIME RULE as getHoursByStudent() so OJT
+  // completion hours never include unapproved early minutes.
   static async checkCompletionAndNotify(
     student_id,
     academic_year_id
@@ -691,7 +772,25 @@ if (early_attendance) {
                   TIME_TO_SEC(
                     TIMEDIFF(
                       a.time_out,
-                      a.time_in
+                      CASE
+                        WHEN a.early_attendance = 1
+                         AND a.early_status = 'approved'
+                        THEN a.time_in
+                        WHEN (
+                          (
+                            s.start_time < '18:00:00'
+                            AND a.time_in < s.start_time
+                          )
+                          OR
+                          (
+                            s.start_time >= '18:00:00'
+                            AND a.time_in >= '12:00:00'
+                            AND a.time_in < s.start_time
+                          )
+                        )
+                        THEN s.start_time
+                        ELSE a.time_in
+                      END
                     )
                   ),
                   0
@@ -716,7 +815,25 @@ if (early_attendance) {
                         TIME_TO_SEC(
                           TIMEDIFF(
                             a.time_out,
-                            a.time_in
+                            CASE
+                              WHEN a.early_attendance = 1
+                               AND a.early_status = 'approved'
+                              THEN a.time_in
+                              WHEN (
+                                (
+                                  s.start_time < '18:00:00'
+                                  AND a.time_in < s.start_time
+                                )
+                                OR
+                                (
+                                  s.start_time >= '18:00:00'
+                                  AND a.time_in >= '12:00:00'
+                                  AND a.time_in < s.start_time
+                                )
+                              )
+                              THEN s.start_time
+                              ELSE a.time_in
+                            END
                           )
                         ),
                         0
@@ -772,8 +889,9 @@ if (early_attendance) {
       FROM notifications
       WHERE user_id = ?
       AND title = 'OJT Completed'
+      AND academic_year_id = ?
       LIMIT 1
-    `, [row.user_id]);
+    `, [row.user_id, academic_year_id]);
 
     if (existing) return;
 
@@ -791,6 +909,10 @@ if (early_attendance) {
   // =========================
   // TODAY
   // =========================
+  // display_time_in follows the EFFECTIVE TIME RULE:
+  //   approved -> actual time_in
+  //   pending / rejected (time_in earlier than start_time) -> start_time
+  //   otherwise -> actual time_in
   static async getToday(student_id, academic_year_id) {
     const active = await this.getActiveAttendance(student_id, academic_year_id);
 
@@ -802,10 +924,48 @@ if (early_attendance) {
       LIMIT 1
     `, [student_id]);
 
+      const isApproved =
+        active.early_attendance &&
+        active.early_status === "approved";
+
+      let isEarlierThanStart = false;
+
+      if (student?.start_time && active.time_in) {
+        const startMinutes = toMinutes(student.start_time);
+        const timeInMinutes = toMinutes(active.time_in);
+
+        const isNightShift = startMinutes >= 18 * 60;
+
+        if (isNightShift) {
+          // Night shift:
+          // 12:00 AM-11:59 AM belongs to next calendar day
+          // and should NOT be treated as early
+          if (
+            timeInMinutes >= 12 * 60 &&
+            timeInMinutes < startMinutes
+          ) {
+            isEarlierThanStart = true;
+          }
+        } else {
+          // Day shift
+          if (timeInMinutes < startMinutes) {
+            isEarlierThanStart = true;
+          }
+        }
+      }
+
+      const display_time_in =
+        isApproved
+          ? active.time_in
+          : isEarlierThanStart
+            ? student.start_time
+            : active.time_in;
+
       return {
         ...active,
         start_time: student?.start_time || null,
-        end_time: student?.end_time || null
+        end_time: student?.end_time || null,
+        display_time_in
       };
     }
 
@@ -828,6 +988,26 @@ if (early_attendance) {
       a.early_attachment_url,
       a.early_attachment_name,
 
+      CASE
+        WHEN a.early_attendance = 1
+         AND a.early_status = 'approved'
+        THEN a.time_in
+        WHEN (
+          (
+            s.start_time < '18:00:00'
+            AND a.time_in < s.start_time
+          )
+          OR
+          (
+            s.start_time >= '18:00:00'
+            AND a.time_in >= '12:00:00'
+            AND a.time_in < s.start_time
+          )
+        )
+        THEN s.start_time
+        ELSE a.time_in
+      END AS display_time_in,
+
       s.start_time,
       s.end_time
 
@@ -838,7 +1018,6 @@ if (early_attendance) {
 
     WHERE a.student_id = ?
     AND a.academic_year_id = ?
-    AND a.attendance_date = CURDATE()
 
     ORDER BY a.attendance_id DESC
     LIMIT 1
@@ -850,6 +1029,7 @@ if (early_attendance) {
   // =========================
   // HISTORY
   // =========================
+  // display_time_in follows the same EFFECTIVE TIME RULE as getToday().
   static async getStudentHistory(student_id, academic_year_id) {
 
     const [rows] = await db.query(`
@@ -870,6 +1050,26 @@ if (early_attendance) {
       a.early_status,
       a.early_attachment_url,
       a.early_attachment_name,
+
+      CASE
+        WHEN a.early_attendance = 1
+         AND a.early_status = 'approved'
+        THEN a.time_in
+        WHEN (
+          (
+            s.start_time < '18:00:00'
+            AND a.time_in < s.start_time
+          )
+          OR
+          (
+            s.start_time >= '18:00:00'
+            AND a.time_in >= '12:00:00'
+            AND a.time_in < s.start_time
+          )
+        )
+        THEN s.start_time
+        ELSE a.time_in
+      END AS display_time_in,
 
       s.start_time,
       s.end_time
@@ -915,6 +1115,9 @@ if (early_attendance) {
   // =========================
   // COORDINATOR: STUDENT RECORDS
   // =========================
+  // Coordinator/Admin view: always returns raw, real attendance data
+  // (actual time_in and full early-request details). Not modified
+  // by the display/effective-time rules above.
   static async getStudentAttendanceRecords(student_id, academic_year_id) {
 
     const [rows] = await db.query(`

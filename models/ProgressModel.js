@@ -1,11 +1,143 @@
 const db = require("../config/db");
 
+const ATTENDANCE_SECONDS_SQL = `
+  SELECT
+    dur.attendance_id,
+    dur.student_id,
+    dur.academic_year_id,
+    dur.attendance_date,
+    dur.location_status,
+    (
+      dur.work_seconds_raw
+      - CASE
+          WHEN dur.lunch_break_start IS NOT NULL
+           AND dur.lunch_break_end IS NOT NULL
+          THEN
+            CASE
+              WHEN dur.lunch_break_end >= dur.lunch_break_start
+              THEN TIME_TO_SEC(
+                     TIMEDIFF(
+                       dur.lunch_break_end,
+                       dur.lunch_break_start
+                     )
+                   )
+              ELSE TIME_TO_SEC(
+                     TIMEDIFF(
+                       ADDTIME(dur.lunch_break_end, '24:00:00'),
+                       dur.lunch_break_start
+                     )
+                   )
+            END
+          ELSE
+            IF(dur.work_seconds_raw >= 18000, 3600, 0)
+        END
+      + dur.ot_seconds
+    ) AS total_seconds
+
+  FROM (
+    SELECT
+      eti.attendance_id,
+      eti.student_id,
+      eti.academic_year_id,
+      eti.attendance_date,
+      eti.location_status,
+
+      IFNULL(
+        CASE
+          WHEN eti.time_out IS NULL
+           OR eti.effective_time_in IS NULL
+          THEN NULL
+
+          WHEN eti.time_out >= eti.effective_time_in
+          THEN TIME_TO_SEC(
+                 TIMEDIFF(eti.time_out, eti.effective_time_in)
+               )
+
+          ELSE TIME_TO_SEC(
+                 TIMEDIFF(
+                   ADDTIME(eti.time_out, '24:00:00'),
+                   eti.effective_time_in
+                 )
+               )
+        END,
+        0
+      ) AS work_seconds_raw,
+
+      IFNULL(
+        CASE
+          WHEN eti.ot_time_in IS NOT NULL
+           AND eti.ot_time_out IS NOT NULL
+          THEN
+            CASE
+              WHEN eti.ot_time_out >= eti.ot_time_in
+              THEN TIME_TO_SEC(
+                     TIMEDIFF(eti.ot_time_out, eti.ot_time_in)
+                   )
+              ELSE TIME_TO_SEC(
+                     TIMEDIFF(
+                       ADDTIME(eti.ot_time_out, '24:00:00'),
+                       eti.ot_time_in
+                     )
+                   )
+            END
+          ELSE 0
+        END,
+        0
+      ) AS ot_seconds,
+
+      eti.lunch_break_start,
+      eti.lunch_break_end
+
+    FROM (
+      SELECT
+        att.attendance_id,
+        att.student_id,
+        att.academic_year_id,
+        att.attendance_date,
+        att.location_status,
+        att.time_out,
+        att.lunch_break_start,
+        att.lunch_break_end,
+        att.ot_time_in,
+        att.ot_time_out,
+
+        CASE
+          WHEN att.early_attendance = 1
+           AND att.early_status = 'approved'
+          THEN att.time_in
+
+          WHEN (
+            (
+              stu.start_time < '18:00:00'
+              AND att.time_in < stu.start_time
+            )
+            OR
+            (
+              stu.start_time >= '18:00:00'
+              AND att.time_in >= '12:00:00'
+              AND att.time_in < stu.start_time
+            )
+          )
+          THEN stu.start_time
+
+          ELSE att.time_in
+        END AS effective_time_in
+
+      FROM attendance att
+
+      JOIN students stu
+        ON stu.student_id = att.student_id
+        AND stu.academic_year_id = att.academic_year_id
+    ) eti
+  ) dur
+`;
+
 class ProgressModel {
 
   // ─────────────────────────────────────────
   // STUDENT HOURS + INFO
   // ─────────────────────────────────────────
-  static async getStudentHours(student_id) {
+  static async getStudentHours(student_id, academic_year_id) {
 
     const [rows] = await db.query(`
       SELECT
@@ -21,49 +153,10 @@ class ProgressModel {
         ROUND(
           IFNULL(
             SUM(
-              CASE 
+              CASE
                 WHEN a.location_status = 'verified'
-                THEN (
-                  (
-                    IFNULL(
-                      TIME_TO_SEC(TIMEDIFF(a.time_out, a.time_in)),
-                      0
-                    )
-
-                    - IF(
-                        a.lunch_break_start IS NOT NULL
-                        AND a.lunch_break_end IS NOT NULL,
-
-                        TIME_TO_SEC(
-                          TIMEDIFF(
-                            a.lunch_break_end,
-                            a.lunch_break_start
-                          )
-                        ),
-
-                        IF(
-                          IFNULL(
-                            TIME_TO_SEC(
-                              TIMEDIFF(a.time_out, a.time_in)
-                            ),
-                            0
-                          ) >= 18000,
-                          3600,
-                          0
-                        )
-                      )
-                  )
-
-                  + IFNULL(
-                      TIME_TO_SEC(
-                        TIMEDIFF(
-                          a.ot_time_out,
-                          a.ot_time_in
-                        )
-                      ),
-                      0
-                    )
-                )
+                 AND a.total_seconds > 0
+                THEN a.total_seconds
                 ELSE 0
               END
             ),
@@ -79,20 +172,34 @@ class ProgressModel {
       LEFT JOIN departments d ON d.department_id = s.department_id
       LEFT JOIN courses crs ON crs.course_id = s.course_id
 
-      LEFT JOIN coordinators co 
+      LEFT JOIN (
+        SELECT co1.*
+        FROM coordinators co1
+        WHERE co1.coordinator_id = (
+          SELECT co2.coordinator_id
+          FROM coordinators co2
+          WHERE co2.department_id = co1.department_id
+          ORDER BY co2.coordinator_id DESC
+          LIMIT 1
+        )
+      ) co
         ON co.department_id = s.department_id
 
-      LEFT JOIN users cu 
+      LEFT JOIN users cu
         ON cu.user_id = co.user_id
 
-      LEFT JOIN attendance a 
+      LEFT JOIN (
+        ${ATTENDANCE_SECONDS_SQL}
+      ) a
         ON a.student_id = s.student_id
+        AND a.academic_year_id = ?
 
       WHERE s.student_id = ?
+        AND s.academic_year_id = ?
 
       GROUP BY s.student_id
       LIMIT 1
-    `, [student_id]);
+    `, [academic_year_id, student_id, academic_year_id]);
 
     return rows[0] || null;
   }
@@ -100,7 +207,7 @@ class ProgressModel {
   // ─────────────────────────────────────────
   // DAILY LOG STATS
   // ─────────────────────────────────────────
-  static async getDailyLogStats(student_id) {
+  static async getDailyLogStats(student_id, academic_year_id) {
 
     const [rows] = await db.query(`
       SELECT
@@ -110,7 +217,8 @@ class ProgressModel {
         IFNULL(SUM(status='revision'),0) AS needsRevision
       FROM daily_logs
       WHERE student_id = ?
-    `, [student_id]);
+        AND academic_year_id = ?
+    `, [student_id, academic_year_id]);
 
     return rows[0] || {
       total: 0,
@@ -123,7 +231,7 @@ class ProgressModel {
   // ─────────────────────────────────────────
   // NARRATIVE STATS
   // ─────────────────────────────────────────
-  static async getNarrativeStats(student_id) {
+  static async getNarrativeStats(student_id, academic_year_id) {
 
     const [rows] = await db.query(`
       SELECT
@@ -133,7 +241,8 @@ class ProgressModel {
         IFNULL(SUM(status='revision'),0) AS revision
       FROM narrative_reports
       WHERE student_id = ?
-    `, [student_id]);
+        AND academic_year_id = ?
+    `, [student_id, academic_year_id]);
 
     return rows[0] || {
       total: 0,
@@ -146,58 +255,26 @@ class ProgressModel {
   // ─────────────────────────────────────────
   // ATTENDANCE STATS
   // ─────────────────────────────────────────
-  static async getAttendanceStats(student_id) {
+  static async getAttendanceStats(student_id, academic_year_id) {
 
     const [rows] = await db.query(`
       SELECT
-        COUNT(DISTINCT attendance_date) AS totalDays,
+        COUNT(
+          DISTINCT CASE
+            WHEN a.location_status = 'verified'
+             AND a.total_seconds > 0
+            THEN a.attendance_date
+            ELSE NULL
+          END
+        ) AS totalDays,
 
         ROUND(
           IFNULL(
             SUM(
-              CASE 
-                WHEN location_status = 'verified'
-                THEN (
-                  (
-                    IFNULL(
-                      TIME_TO_SEC(TIMEDIFF(time_out, time_in)),
-                      0
-                    )
-
-                    - IF(
-                        lunch_break_start IS NOT NULL
-                        AND lunch_break_end IS NOT NULL,
-
-                        TIME_TO_SEC(
-                          TIMEDIFF(
-                            lunch_break_end,
-                            lunch_break_start
-                          )
-                        ),
-
-                        IF(
-                          IFNULL(
-                            TIME_TO_SEC(
-                              TIMEDIFF(time_out, time_in)
-                            ),
-                            0
-                          ) >= 18000,
-                          3600,
-                          0
-                        )
-                      )
-                  )
-
-                  + IFNULL(
-                      TIME_TO_SEC(
-                        TIMEDIFF(
-                          ot_time_out,
-                          ot_time_in
-                        )
-                      ),
-                      0
-                    )
-                )
+              CASE
+                WHEN a.location_status = 'verified'
+                 AND a.total_seconds > 0
+                THEN a.total_seconds
                 ELSE 0
               END
             ),
@@ -206,12 +283,16 @@ class ProgressModel {
           2
         ) AS totalHours,
 
-        MIN(attendance_date) AS firstDate,
-        MAX(attendance_date) AS lastDate
+        MIN(a.attendance_date) AS firstDate,
+        MAX(a.attendance_date) AS lastDate
 
-      FROM attendance
-      WHERE student_id = ?
-    `, [student_id]);
+      FROM (
+        ${ATTENDANCE_SECONDS_SQL}
+      ) a
+
+      WHERE a.student_id = ?
+        AND a.academic_year_id = ?
+    `, [student_id, academic_year_id]);
 
     const r = rows[0] || {};
 

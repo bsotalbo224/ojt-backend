@@ -22,8 +22,29 @@ const verifyToken = (req, res, next) => {
 
     const payload = jwt.verify(token, process.env.JWT_SECRET);
 
+    // Default to the academic year embedded in the JWT.
+    let academic_year_id = payload.academic_year_id || null;
+
     const selectedAcademicYear =
       req.headers["x-academic-year-id"];
+
+    // Only admins and coordinators may override the academic year
+    // via header. Students must always use the year from their JWT.
+    if (
+      selectedAcademicYear !== undefined &&
+      (payload.role === "admin" || payload.role === "coordinator")
+    ) {
+      const parsedAcademicYear = Number(selectedAcademicYear);
+
+      if (Number.isNaN(parsedAcademicYear)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid academic year id"
+        });
+      }
+
+      academic_year_id = parsedAcademicYear;
+    }
 
     req.user = {
       user_id: payload.user_id,
@@ -31,10 +52,7 @@ const verifyToken = (req, res, next) => {
       student_id: payload.student_id || null,
       coordinator_id: payload.coordinator_id || null,
       department_id: payload.department_id || null,
-      academic_year_id:
-        selectedAcademicYear ||
-        payload.academic_year_id ||
-        null
+      academic_year_id
     };
 
     next();
