@@ -23,6 +23,57 @@ const BUSINESS_ERRORS = [
   "Attendance already completed"
 ];
 
+
+function mapAttendanceRow(r) {
+  return {
+    id: r.attendance_id,
+
+    date: r.attendance_date,
+
+    time_in:
+      r.display_time_in ?? r.time_in,
+
+    lunch_break_start:
+      r.lunch_break_start,
+
+    lunch_break_end:
+      r.lunch_break_end,
+
+    time_out:
+      r.time_out,
+
+    ot_time_in:
+      r.ot_time_in,
+
+    ot_time_out:
+      r.ot_time_out,
+
+    start_time:
+      r.start_time,
+
+    end_time:
+      r.end_time,
+
+    early_attendance:
+      r.early_attendance,
+
+    early_reason:
+      r.early_reason,
+
+    early_status:
+      r.early_status,
+
+    early_attachment_url:
+      r.early_attachment_url,
+
+    early_attachment_public_id:
+      r.early_attachment_public_id,
+
+    early_attachment_name:
+      r.early_attachment_name
+  };
+}
+
 /* ===================================================
 STUDENT: MY ATTENDANCE (TODAY)
 =================================================== */
@@ -268,18 +319,41 @@ router.patch("/timeout", requireRole("student"), async (req, res) => {
 });
 
 /* ===================================================
-STUDENT: ATTENDANCE HISTORY
+STUDENT: ATTENDANCE HISTORY (PAGINATED)
 =================================================== */
 router.get("/history", requireRole("student"), async (req, res) => {
   try {
 
     const studentId = req.user.student_id;
 
+    // =========================
+    // PARSE PAGINATION QUERY PARAMS (sanitized)
+    // =========================
+    const page = Math.max(
+      parseInt(req.query.page, 10) || 1,
+      1
+    );
+
+    const limit = Math.min(
+      Math.max(parseInt(req.query.limit, 10) || 15, 1),
+      100
+    );
+
     const todayRow =
       await AttendanceModel.getToday(studentId, req.user.academic_year_id);
 
-    const historyRows =
-      await AttendanceModel.getStudentHistory(studentId, req.user.academic_year_id);
+    const historyResult =
+      await AttendanceModel.getStudentHistory(
+        studentId,
+        req.user.academic_year_id,
+        page,
+        limit
+      );
+
+    const {
+      data: historyRows,
+      pagination
+    } = historyResult;
 
     // =========================
     // TODAY
@@ -337,64 +411,54 @@ router.get("/history", requireRole("student"), async (req, res) => {
     // =========================
     // HISTORY
     // =========================
-    const history = historyRows.map(r => ({
-      id: r.attendance_id,
-
-      date: r.attendance_date,
-
-      time_in:
-        r.display_time_in ?? r.time_in,
-
-      lunch_break_start:
-        r.lunch_break_start,
-
-      lunch_break_end:
-        r.lunch_break_end,
-
-      time_out:
-        r.time_out,
-
-      ot_time_in:
-        r.ot_time_in,
-
-      ot_time_out:
-        r.ot_time_out,
-
-      start_time:
-        r.start_time,
-
-      end_time:
-        r.end_time,
-
-      early_attendance:
-        r.early_attendance,
-
-      early_reason:
-        r.early_reason,
-
-      early_status:
-        r.early_status,
-
-      early_attachment_url:
-        r.early_attachment_url,
-
-      early_attachment_public_id:
-        r.early_attachment_public_id,
-
-      early_attachment_name:
-        r.early_attachment_name
-    }));
+    const history = historyRows.map(mapAttendanceRow);
 
     res.json({
       success: true,
       today,
-      history
+      history,
+      pagination
     });
 
   } catch (err) {
 
     console.error(
       "ATTENDANCE HISTORY ERROR:",
+      err
+    );
+
+    res.status(500).json({
+      success: false
+    });
+  }
+});
+
+/* ===================================================
+STUDENT: ATTENDANCE HISTORY EXPORT (FULL, NO PAGINATION)
+Used only for PDF export — always returns ALL attendance rows.
+=================================================== */
+router.get("/history/export", requireRole("student"), async (req, res) => {
+  try {
+
+    const studentId = req.user.student_id;
+
+    const rows =
+      await AttendanceModel.getStudentHistoryForExport(
+        studentId,
+        req.user.academic_year_id
+      );
+
+    const history = rows.map(mapAttendanceRow);
+
+    res.json({
+      success: true,
+      history
+    });
+
+  } catch (err) {
+
+    console.error(
+      "ATTENDANCE HISTORY EXPORT ERROR:",
       err
     );
 

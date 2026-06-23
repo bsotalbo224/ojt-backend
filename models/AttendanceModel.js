@@ -52,6 +52,15 @@ class AttendanceModel {
   // =========================
   // STUDENT ATTENDANCE
   // =========================
+  // LEGACY / INTERNAL: returns raw attendance rows (no early-attendance
+  // fields, no display_time_in, no student schedule join, no pagination).
+  // Not called anywhere else in this file — not used by getStudentHistory()
+  // or getStudentHistoryForExport(). Kept for backward compatibility with
+  // any existing controller/route that may still call it directly. New
+  // student-facing attendance history reads should use getStudentHistory()
+  // (paginated) or getStudentHistoryForExport() (full, for PDF export)
+  // instead, since those include the effective-time / early-attendance
+  // display rules. Do not remove without confirming no external callers.
   static async getByStudent(
     student_id,
     academic_year_id
@@ -637,6 +646,15 @@ if (early_attendance) {
   //     as a continuation of the previous evening's shift, NOT early)
   //   - otherwise -> use actual a.time_in
   // This guarantees early minutes are NEVER counted unless explicitly approved.
+  //
+  // OVERNIGHT-SAFE DURATIONS:
+  //   Plain TIMEDIFF(end, start) goes negative whenever a shift, break, or
+  //   OT session crosses midnight (e.g. time_in 22:00 -> time_out 06:00).
+  //   Every duration below is wrapped in a CASE that detects end < start
+  //   and adds 24:00:00 to "end" via ADDTIME before diffing, so work
+  //   hours, lunch/meal breaks, and OT all compute correctly across
+  //   midnight. Same-day durations are unaffected (CASE falls through
+  //   to the original plain TIMEDIFF).
   static async getHoursByStudent(student_id, academic_year_id) {
 
     const [[row]] = await db.query(`
@@ -647,28 +665,73 @@ if (early_attendance) {
               (
                 IFNULL(
                   TIME_TO_SEC(
-                    TIMEDIFF(
-                      a.time_out,
-                      CASE
-                        WHEN a.early_attendance = 1
-                         AND a.early_status = 'approved'
-                        THEN a.time_in
-                        WHEN (
-                          (
-                            s.start_time < '18:00:00'
-                            AND a.time_in < s.start_time
+                    CASE
+                      WHEN a.time_out < (
+                        CASE
+                          WHEN a.early_attendance = 1
+                           AND a.early_status = 'approved'
+                          THEN a.time_in
+                          WHEN (
+                            (
+                              s.start_time < '18:00:00'
+                              AND a.time_in < s.start_time
+                            )
+                            OR
+                            (
+                              s.start_time >= '18:00:00'
+                              AND a.time_in >= '12:00:00'
+                              AND a.time_in < s.start_time
+                            )
                           )
-                          OR
-                          (
-                            s.start_time >= '18:00:00'
-                            AND a.time_in >= '12:00:00'
-                            AND a.time_in < s.start_time
+                          THEN s.start_time
+                          ELSE a.time_in
+                        END
+                      )
+                      THEN TIMEDIFF(
+                        ADDTIME(a.time_out, '24:00:00'),
+                        CASE
+                          WHEN a.early_attendance = 1
+                           AND a.early_status = 'approved'
+                          THEN a.time_in
+                          WHEN (
+                            (
+                              s.start_time < '18:00:00'
+                              AND a.time_in < s.start_time
+                            )
+                            OR
+                            (
+                              s.start_time >= '18:00:00'
+                              AND a.time_in >= '12:00:00'
+                              AND a.time_in < s.start_time
+                            )
                           )
-                        )
-                        THEN s.start_time
-                        ELSE a.time_in
-                      END
-                    )
+                          THEN s.start_time
+                          ELSE a.time_in
+                        END
+                      )
+                      ELSE TIMEDIFF(
+                        a.time_out,
+                        CASE
+                          WHEN a.early_attendance = 1
+                           AND a.early_status = 'approved'
+                          THEN a.time_in
+                          WHEN (
+                            (
+                              s.start_time < '18:00:00'
+                              AND a.time_in < s.start_time
+                            )
+                            OR
+                            (
+                              s.start_time >= '18:00:00'
+                              AND a.time_in >= '12:00:00'
+                              AND a.time_in < s.start_time
+                            )
+                          )
+                          THEN s.start_time
+                          ELSE a.time_in
+                        END
+                      )
+                    END
                   ),
                   0
                 )
@@ -678,37 +741,89 @@ if (early_attendance) {
                     AND a.lunch_break_end IS NOT NULL,
 
                     TIME_TO_SEC(
-                      TIMEDIFF(
-                        a.lunch_break_end,
-                        a.lunch_break_start
-                      )
+                      CASE
+                        WHEN a.lunch_break_end < a.lunch_break_start
+                        THEN TIMEDIFF(
+                          ADDTIME(a.lunch_break_end, '24:00:00'),
+                          a.lunch_break_start
+                        )
+                        ELSE TIMEDIFF(
+                          a.lunch_break_end,
+                          a.lunch_break_start
+                        )
+                      END
                     ),
 
                     IF(
                       IFNULL(
                         TIME_TO_SEC(
-                          TIMEDIFF(
-                            a.time_out,
-                            CASE
-                              WHEN a.early_attendance = 1
-                               AND a.early_status = 'approved'
-                              THEN a.time_in
-                              WHEN (
-                                (
-                                  s.start_time < '18:00:00'
-                                  AND a.time_in < s.start_time
+                          CASE
+                            WHEN a.time_out < (
+                              CASE
+                                WHEN a.early_attendance = 1
+                                 AND a.early_status = 'approved'
+                                THEN a.time_in
+                                WHEN (
+                                  (
+                                    s.start_time < '18:00:00'
+                                    AND a.time_in < s.start_time
+                                  )
+                                  OR
+                                  (
+                                    s.start_time >= '18:00:00'
+                                    AND a.time_in >= '12:00:00'
+                                    AND a.time_in < s.start_time
+                                  )
                                 )
-                                OR
-                                (
-                                  s.start_time >= '18:00:00'
-                                  AND a.time_in >= '12:00:00'
-                                  AND a.time_in < s.start_time
+                                THEN s.start_time
+                                ELSE a.time_in
+                              END
+                            )
+                            THEN TIMEDIFF(
+                              ADDTIME(a.time_out, '24:00:00'),
+                              CASE
+                                WHEN a.early_attendance = 1
+                                 AND a.early_status = 'approved'
+                                THEN a.time_in
+                                WHEN (
+                                  (
+                                    s.start_time < '18:00:00'
+                                    AND a.time_in < s.start_time
+                                  )
+                                  OR
+                                  (
+                                    s.start_time >= '18:00:00'
+                                    AND a.time_in >= '12:00:00'
+                                    AND a.time_in < s.start_time
+                                  )
                                 )
-                              )
-                              THEN s.start_time
-                              ELSE a.time_in
-                            END
-                          )
+                                THEN s.start_time
+                                ELSE a.time_in
+                              END
+                            )
+                            ELSE TIMEDIFF(
+                              a.time_out,
+                              CASE
+                                WHEN a.early_attendance = 1
+                                 AND a.early_status = 'approved'
+                                THEN a.time_in
+                                WHEN (
+                                  (
+                                    s.start_time < '18:00:00'
+                                    AND a.time_in < s.start_time
+                                  )
+                                  OR
+                                  (
+                                    s.start_time >= '18:00:00'
+                                    AND a.time_in >= '12:00:00'
+                                    AND a.time_in < s.start_time
+                                  )
+                                )
+                                THEN s.start_time
+                                ELSE a.time_in
+                              END
+                            )
+                          END
                         ),
                         0
                       ) >= 18000,
@@ -720,10 +835,17 @@ if (early_attendance) {
 
               + IFNULL(
                   TIME_TO_SEC(
-                    TIMEDIFF(
-                      a.ot_time_out,
-                      a.ot_time_in
-                    )
+                    CASE
+                      WHEN a.ot_time_out < a.ot_time_in
+                      THEN TIMEDIFF(
+                        ADDTIME(a.ot_time_out, '24:00:00'),
+                        a.ot_time_in
+                      )
+                      ELSE TIMEDIFF(
+                        a.ot_time_out,
+                        a.ot_time_in
+                      )
+                    END
                   ),
                   0
                 )
@@ -750,8 +872,9 @@ if (early_attendance) {
   // =========================
   // COMPLETION CHECK
   // =========================
-  // Uses the same EFFECTIVE TIME RULE as getHoursByStudent() so OJT
-  // completion hours never include unapproved early minutes.
+  // Uses the same EFFECTIVE TIME RULE and overnight-safe duration logic
+  // as getHoursByStudent() so OJT completion hours never include
+  // unapproved early minutes and never break on night-shift students.
   static async checkCompletionAndNotify(
     student_id,
     academic_year_id
@@ -770,28 +893,73 @@ if (early_attendance) {
               (
                 IFNULL(
                   TIME_TO_SEC(
-                    TIMEDIFF(
-                      a.time_out,
-                      CASE
-                        WHEN a.early_attendance = 1
-                         AND a.early_status = 'approved'
-                        THEN a.time_in
-                        WHEN (
-                          (
-                            s.start_time < '18:00:00'
-                            AND a.time_in < s.start_time
+                    CASE
+                      WHEN a.time_out < (
+                        CASE
+                          WHEN a.early_attendance = 1
+                           AND a.early_status = 'approved'
+                          THEN a.time_in
+                          WHEN (
+                            (
+                              s.start_time < '18:00:00'
+                              AND a.time_in < s.start_time
+                            )
+                            OR
+                            (
+                              s.start_time >= '18:00:00'
+                              AND a.time_in >= '12:00:00'
+                              AND a.time_in < s.start_time
+                            )
                           )
-                          OR
-                          (
-                            s.start_time >= '18:00:00'
-                            AND a.time_in >= '12:00:00'
-                            AND a.time_in < s.start_time
+                          THEN s.start_time
+                          ELSE a.time_in
+                        END
+                      )
+                      THEN TIMEDIFF(
+                        ADDTIME(a.time_out, '24:00:00'),
+                        CASE
+                          WHEN a.early_attendance = 1
+                           AND a.early_status = 'approved'
+                          THEN a.time_in
+                          WHEN (
+                            (
+                              s.start_time < '18:00:00'
+                              AND a.time_in < s.start_time
+                            )
+                            OR
+                            (
+                              s.start_time >= '18:00:00'
+                              AND a.time_in >= '12:00:00'
+                              AND a.time_in < s.start_time
+                            )
                           )
-                        )
-                        THEN s.start_time
-                        ELSE a.time_in
-                      END
-                    )
+                          THEN s.start_time
+                          ELSE a.time_in
+                        END
+                      )
+                      ELSE TIMEDIFF(
+                        a.time_out,
+                        CASE
+                          WHEN a.early_attendance = 1
+                           AND a.early_status = 'approved'
+                          THEN a.time_in
+                          WHEN (
+                            (
+                              s.start_time < '18:00:00'
+                              AND a.time_in < s.start_time
+                            )
+                            OR
+                            (
+                              s.start_time >= '18:00:00'
+                              AND a.time_in >= '12:00:00'
+                              AND a.time_in < s.start_time
+                            )
+                          )
+                          THEN s.start_time
+                          ELSE a.time_in
+                        END
+                      )
+                    END
                   ),
                   0
                 )
@@ -804,37 +972,89 @@ if (early_attendance) {
                       IS NOT NULL,
 
                     TIME_TO_SEC(
-                      TIMEDIFF(
-                        a.lunch_break_end,
-                        a.lunch_break_start
-                      )
+                      CASE
+                        WHEN a.lunch_break_end < a.lunch_break_start
+                        THEN TIMEDIFF(
+                          ADDTIME(a.lunch_break_end, '24:00:00'),
+                          a.lunch_break_start
+                        )
+                        ELSE TIMEDIFF(
+                          a.lunch_break_end,
+                          a.lunch_break_start
+                        )
+                      END
                     ),
 
                     IF(
                       IFNULL(
                         TIME_TO_SEC(
-                          TIMEDIFF(
-                            a.time_out,
-                            CASE
-                              WHEN a.early_attendance = 1
-                               AND a.early_status = 'approved'
-                              THEN a.time_in
-                              WHEN (
-                                (
-                                  s.start_time < '18:00:00'
-                                  AND a.time_in < s.start_time
+                          CASE
+                            WHEN a.time_out < (
+                              CASE
+                                WHEN a.early_attendance = 1
+                                 AND a.early_status = 'approved'
+                                THEN a.time_in
+                                WHEN (
+                                  (
+                                    s.start_time < '18:00:00'
+                                    AND a.time_in < s.start_time
+                                  )
+                                  OR
+                                  (
+                                    s.start_time >= '18:00:00'
+                                    AND a.time_in >= '12:00:00'
+                                    AND a.time_in < s.start_time
+                                  )
                                 )
-                                OR
-                                (
-                                  s.start_time >= '18:00:00'
-                                  AND a.time_in >= '12:00:00'
-                                  AND a.time_in < s.start_time
+                                THEN s.start_time
+                                ELSE a.time_in
+                              END
+                            )
+                            THEN TIMEDIFF(
+                              ADDTIME(a.time_out, '24:00:00'),
+                              CASE
+                                WHEN a.early_attendance = 1
+                                 AND a.early_status = 'approved'
+                                THEN a.time_in
+                                WHEN (
+                                  (
+                                    s.start_time < '18:00:00'
+                                    AND a.time_in < s.start_time
+                                  )
+                                  OR
+                                  (
+                                    s.start_time >= '18:00:00'
+                                    AND a.time_in >= '12:00:00'
+                                    AND a.time_in < s.start_time
+                                  )
                                 )
-                              )
-                              THEN s.start_time
-                              ELSE a.time_in
-                            END
-                          )
+                                THEN s.start_time
+                                ELSE a.time_in
+                              END
+                            )
+                            ELSE TIMEDIFF(
+                              a.time_out,
+                              CASE
+                                WHEN a.early_attendance = 1
+                                 AND a.early_status = 'approved'
+                                THEN a.time_in
+                                WHEN (
+                                  (
+                                    s.start_time < '18:00:00'
+                                    AND a.time_in < s.start_time
+                                  )
+                                  OR
+                                  (
+                                    s.start_time >= '18:00:00'
+                                    AND a.time_in >= '12:00:00'
+                                    AND a.time_in < s.start_time
+                                  )
+                                )
+                                THEN s.start_time
+                                ELSE a.time_in
+                              END
+                            )
+                          END
                         ),
                         0
                       ) >= 18000,
@@ -846,10 +1066,17 @@ if (early_attendance) {
 
               + IFNULL(
                   TIME_TO_SEC(
-                    TIMEDIFF(
-                      a.ot_time_out,
-                      a.ot_time_in
-                    )
+                    CASE
+                      WHEN a.ot_time_out < a.ot_time_in
+                      THEN TIMEDIFF(
+                        ADDTIME(a.ot_time_out, '24:00:00'),
+                        a.ot_time_in
+                      )
+                      ELSE TIMEDIFF(
+                        a.ot_time_out,
+                        a.ot_time_in
+                      )
+                    END
                   ),
                   0
                 )
@@ -894,6 +1121,7 @@ if (early_attendance) {
     `, [row.user_id, academic_year_id]);
 
     if (existing) return;
+
 
     await sendNotification({
       user_id: row.user_id,
@@ -1027,10 +1255,110 @@ if (early_attendance) {
   }
 
   // =========================
-  // HISTORY
+  // HISTORY (PAGINATED)
   // =========================
   // display_time_in follows the same EFFECTIVE TIME RULE as getToday().
-  static async getStudentHistory(student_id, academic_year_id) {
+  // Supports backend pagination (page + limit) for infinite scroll /
+  // performant list rendering. Use getStudentHistoryForExport() when
+  // the FULL unpaginated history is required (e.g. PDF export).
+  static async getStudentHistory(
+    student_id,
+    academic_year_id,
+    page = 1,
+    limit = 15
+  ) {
+
+    const safePage = Math.max(Number(page) || 1, 1);
+    const safeLimit = Math.min(
+      Math.max(Number(limit) || 15, 1),
+      100
+    );
+    const offset = (safePage - 1) * safeLimit;
+
+    const [[countRow]] = await db.query(`
+      SELECT COUNT(*) AS total
+      FROM attendance
+      WHERE student_id = ?
+      AND academic_year_id = ?
+    `, [student_id, academic_year_id]);
+
+    const total = countRow?.total || 0;
+
+    const [rows] = await db.query(`
+    SELECT
+      a.attendance_id,
+      a.attendance_date,
+
+      a.time_in,
+      a.lunch_break_start,
+      a.lunch_break_end,
+      a.time_out,
+
+      a.ot_time_in,
+      a.ot_time_out,
+
+      a.early_attendance,
+      a.early_reason,
+      a.early_status,
+      a.early_attachment_url,
+      a.early_attachment_name,
+
+      CASE
+        WHEN a.early_attendance = 1
+         AND a.early_status = 'approved'
+        THEN a.time_in
+        WHEN (
+          (
+            s.start_time < '18:00:00'
+            AND a.time_in < s.start_time
+          )
+          OR
+          (
+            s.start_time >= '18:00:00'
+            AND a.time_in >= '12:00:00'
+            AND a.time_in < s.start_time
+          )
+        )
+        THEN s.start_time
+        ELSE a.time_in
+      END AS display_time_in,
+
+      s.start_time,
+      s.end_time
+
+    FROM attendance a
+
+    JOIN students s
+      ON a.student_id = s.student_id
+
+    WHERE a.student_id = ?
+    AND a.academic_year_id = ?
+
+    ORDER BY
+      a.attendance_date DESC,
+      a.attendance_id DESC
+    LIMIT ? OFFSET ?
+  `, [student_id, academic_year_id, safeLimit, offset]);
+
+    return {
+      data: rows,
+      pagination: {
+        page: safePage,
+        limit: safeLimit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+        hasMore: safePage * safeLimit < total
+      }
+    };
+  }
+
+  // =========================
+  // HISTORY (FULL, UNPAGINATED — FOR EXPORT)
+  // =========================
+  // Same SELECT, display_time_in logic, and sorting as getStudentHistory(),
+  // but returns ALL rows with no LIMIT/OFFSET. Used by PDF export so the
+  // exported document always contains the complete attendance record.
+  static async getStudentHistoryForExport(student_id, academic_year_id) {
 
     const [rows] = await db.query(`
     SELECT
