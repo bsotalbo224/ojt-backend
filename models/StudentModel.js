@@ -5,12 +5,8 @@ const { sendStudentCredentials } = require("../utils/mailer");
 const { sendNotification } = require("../services/notificationServices");
 const AcademicYearModel = require("./AcademicYearModel");
 
-
 class StudentModel {
 
-  // =========================
-  // ALL STUDENTS (admin)
-  // =========================
   static async getAll(academic_year_id) {
     const [rows] = await db.query(`
       SELECT 
@@ -35,9 +31,6 @@ class StudentModel {
     return rows;
   }
 
-  // =========================
-  // CREATE STUDENT (admin)
-  // =========================
   static async create(data) {
     const {
       f_name,
@@ -61,7 +54,6 @@ class StudentModel {
       const plainPassword = generatePassword(8);
       const hashedPassword = await bcrypt.hash(plainPassword, 10);
 
-      // create user
       const [userRes] = await conn.query(
         `INSERT INTO users (f_name, l_name, email, password, role)
          VALUES (?, ?, ?, ?, 'student')`,
@@ -70,16 +62,12 @@ class StudentModel {
 
       const user_id = userRes.insertId;
 
-      const activeYear =
-        await AcademicYearModel.getActive();
+      const activeYear = await AcademicYearModel.getActive();
 
       if (!activeYear) {
-        throw new Error(
-          "No active academic year found"
-        );
+        throw new Error("No active academic year found");
       }
 
-      // create student
       const [studentRes] = await conn.query(
         `INSERT INTO students (
             user_id,
@@ -102,7 +90,6 @@ class StudentModel {
 
       await conn.commit();
 
-      // system notification
       await sendNotification({
         user_id,
         title: "OJT Account Created",
@@ -112,7 +99,6 @@ class StudentModel {
         academic_year_id: activeYear.academic_year_id
       });
 
-      // email credentials
       await sendStudentCredentials(
         email,
         plainPassword,
@@ -129,32 +115,57 @@ class StudentModel {
     }
   }
 
-  // =========================
-  // UPDATE STUDENT (admin)
-  // =========================
   static async update(student_id, data) {
-    const { f_name, l_name, email, course_id, ojt_hours_required } = data;
+    const [[existing]] = await db.query(
+      `SELECT u.f_name, u.l_name, u.email, s.course_id, s.ojt_hours_required
+       FROM students s
+       JOIN users u ON s.user_id = u.user_id
+       WHERE s.student_id = ?`,
+      [student_id]
+    );
+
+    if (!existing) {
+      const err = new Error("Student not found");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const {
+      f_name,
+      l_name,
+      email,
+      course_id,
+      course,
+      ojt_hours_required,
+      totalHours
+    } = data;
+
+    const finalCourseId = course_id || course || existing.course_id;
+    const finalHours = ojt_hours_required || totalHours || existing.ojt_hours_required;
+    const finalFName = f_name ?? existing.f_name;
+    const finalLName = l_name ?? existing.l_name;
+    const finalEmail = email ?? existing.email;
 
     await db.query(
       `UPDATE users u
        JOIN students s ON s.user_id = u.user_id
        SET u.f_name = ?, u.l_name = ?, u.email = ?
        WHERE s.student_id = ?`,
-      [f_name, l_name, email, student_id]
+      [finalFName, finalLName, finalEmail, student_id]
     );
 
     await db.query(
       `UPDATE students
-   SET 
-     course_id = ?,
-     department_id = (
-       SELECT department_id
-       FROM courses
-       WHERE course_id = ?
-     ),
-     ojt_hours_required = ?
-   WHERE student_id = ?`,
-      [course_id, course_id, ojt_hours_required, student_id]
+       SET 
+         course_id = ?,
+         department_id = (
+           SELECT department_id
+           FROM courses
+           WHERE course_id = ?
+         ),
+         ojt_hours_required = ?
+       WHERE student_id = ?`,
+      [finalCourseId, finalCourseId, finalHours, student_id]
     );
 
     const [[row]] = await db.query(`
@@ -177,23 +188,15 @@ class StudentModel {
     return row;
   }
 
-  // =========================
-  // SET STATUS (admin)
-  // =========================
   static async setStatus(student_id, is_active) {
     await db.query(
       `UPDATE students
-   SET 
-     is_active = ?,
-     inactive_since = IF(? = 0, NOW(), NULL)
-   WHERE student_id = ?`,
+       SET 
+         is_active = ?,
+         inactive_since = IF(? = 0, NOW(), NULL)
+       WHERE student_id = ?`,
       [is_active, is_active, student_id]
     );
-
-    // NOTE:
-    // We intentionally removed activation/deactivation notification
-    // because inactive users cannot log in to see it.
-    // If needed, send EMAIL instead (better UX).
 
     const [[row]] = await db.query(`
       SELECT 
@@ -215,9 +218,6 @@ class StudentModel {
     return row;
   }
 
-  // =========================
-  // STUDENTS BY COORDINATOR
-  // =========================
   static async getByCoordinator(user_id, academic_year_id) {
     const [rows] = await db.query(`
       SELECT 
@@ -246,230 +246,161 @@ class StudentModel {
     return rows;
   }
 
-  // =========================
-  // STUDENT PROGRESS (coordinator)
-  // =========================
-  static async getStudentProgress(student_id) {
+  static async getStudentProgress(student_id, academic_year_id = null) {
+    const safeStudentId = student_id ?? null;
 
-    // Student basic info
     const [[student]] = await db.query(`
-    SELECT 
-  s.student_id,
+      SELECT 
+        s.student_id,
+        s.academic_year_id,
+        s.ojt_hours_required,
+        s.start_time,
+        s.end_time,
+        u.f_name,
+        u.l_name,
+        c.course_code AS course,
+        comp.company_name AS company
+      FROM students s
+      JOIN users u ON s.user_id = u.user_id
+      LEFT JOIN courses c ON s.course_id = c.course_id
+      LEFT JOIN companies comp ON s.company_id = comp.company_id
+      WHERE s.student_id = ?
+        AND (? IS NULL OR s.academic_year_id = ?)
+    `, [safeStudentId, academic_year_id, academic_year_id]);
 
-  s.ojt_hours_required,
+    const effectiveYearId = academic_year_id ?? (student ? student.academic_year_id : null);
 
-  s.start_time,
-  s.end_time,
+    const effectiveStartExpr = `
+      CASE
+        WHEN a.is_early = 1 AND a.early_status = 'approved'
+          THEN a.time_in
+        WHEN a.is_early = 1
+          THEN IFNULL(s.start_time, a.time_in)
+        ELSE a.time_in
+      END
+    `;
 
-  u.f_name,
-  u.l_name,
-
-  c.course_code AS course,
-
-  comp.company_name AS company
-
-    FROM students s
-
-    JOIN users u
-      ON s.user_id = u.user_id
-
-    LEFT JOIN courses c
-      ON s.course_id = c.course_id
-
-    LEFT JOIN companies comp
-      ON s.company_id = comp.company_id
-
-    WHERE s.student_id = ?
-  `, [student_id]);
-
-    // =========================
-    // ATTENDANCE SUMMARY
-    // VERIFIED ONLY COUNTS
-    // =========================
-    const [[summary]] = await db.query(`
-    SELECT
-
-      COUNT(DISTINCT attendance_date)
-        AS attendanceRecords,
-
-      COUNT(DISTINCT attendance_date)
-        AS attendanceDays,
-
-      MAX(attendance_date)
-        AS lastAttendance,
-
-      ROUND(
-        IFNULL(
-          SUM(
-            CASE
-
-              WHEN location_status = 'verified'
-
-              THEN (
-
-                (
-                  IFNULL(
-                    TIME_TO_SEC(
-                      TIMEDIFF(
-                        time_out,
-                        time_in
-                      )
-                    ),
-                    0
-                  )
-
-                  - IF(
-                      lunch_break_start IS NOT NULL
-                      AND lunch_break_end IS NOT NULL,
-
-                      TIME_TO_SEC(
-                        TIMEDIFF(
-                          lunch_break_end,
-                          lunch_break_start
-                        )
-                      ),
-
-                      IF(
-                        IFNULL(
-                          TIME_TO_SEC(
-                            TIMEDIFF(
-                              time_out,
-                              time_in
-                            )
-                          ),
-                          0
-                        ) >= 18000,
-                        3600,
-                        0
-                      )
-                    )
-                )
-
-                + IFNULL(
-                    TIME_TO_SEC(
-                      TIMEDIFF(
-                        ot_time_out,
-                        ot_time_in
-                      )
-                    ),
-                    0
-                  )
-              )
-
-              ELSE 0
-
-            END
-          ),
-          0
-        ) / 3600,
-        2
-      ) AS hoursCompleted
-
-    FROM attendance
-
-    WHERE student_id = ?
-  `, [student_id]);
-
-    // =========================
-    // RECENT ATTENDANCE
-    // KEEP FLAGGED VISIBLE
-    // =========================
-    const [recentAttendance] = await db.query(`
-    SELECT
-
-      attendance_id,
-
-      attendance_date AS date,
-
-      time_in,
-      lunch_break_start,
-      lunch_break_end,
-      time_out,
-
-      ot_time_in,
-      ot_time_out,
-
-      location_status,
-
-      ROUND(
-        (
-          (
-            IFNULL(
-              TIME_TO_SEC(
-                TIMEDIFF(
-                  time_out,
-                  time_in
-                )
-              ),
-              0
-            )
-
-            - IF(
-                lunch_break_start IS NOT NULL
-                AND lunch_break_end IS NOT NULL,
-
-                TIME_TO_SEC(
-                  TIMEDIFF(
-                    lunch_break_end,
-                    lunch_break_start
-                  )
-                ),
-
-                IF(
-                  IFNULL(
-                    TIME_TO_SEC(
-                      TIMEDIFF(
-                        time_out,
-                        time_in
-                      )
-                    ),
-                    0
-                  ) >= 18000,
-                  3600,
-                  0
-                )
-              )
+    const workedSecondsExpr = `
+      IFNULL(
+        TIME_TO_SEC(
+          TIMEDIFF(
+            a.time_out,
+            ${effectiveStartExpr}
           )
+        ),
+        0
+      )
+    `;
 
-          + IFNULL(
-              TIME_TO_SEC(
-                TIMEDIFF(
-                  ot_time_out,
-                  ot_time_in
-                )
-              ),
-              0
+    const lunchDeductionExpr = `
+      IF(
+        a.lunch_break_start IS NOT NULL
+        AND a.lunch_break_end IS NOT NULL,
+        TIME_TO_SEC(
+          TIMEDIFF(
+            a.lunch_break_end,
+            a.lunch_break_start
+          )
+        ),
+        IF(
+          ${workedSecondsExpr} >= 18000,
+          3600,
+          0
+        )
+      )
+    `;
+
+    const otSecondsExpr = `
+      IFNULL(
+        TIME_TO_SEC(
+          TIMEDIFF(
+            a.ot_time_out,
+            a.ot_time_in
+          )
+        ),
+        0
+      )
+    `;
+
+    const totalSecondsExpr = `
+      GREATEST(
+        0,
+        (
+          ${workedSecondsExpr}
+          - ${lunchDeductionExpr}
+          + ${otSecondsExpr}
+        )
+      )
+    `;
+
+    const [[summary]] = await db.query(`
+      SELECT
+        COUNT(CASE WHEN a.location_status != 'flagged' THEN a.attendance_id END) AS attendanceRecords,
+        COUNT(DISTINCT CASE WHEN a.location_status != 'flagged' THEN a.attendance_date END) AS attendanceDays,
+        MAX(CASE WHEN a.location_status != 'flagged' THEN a.attendance_date END) AS lastAttendance,
+        ROUND(
+          IFNULL(
+            SUM(
+              CASE
+                WHEN a.location_status = 'verified'
+                THEN ${totalSecondsExpr}
+                ELSE 0
+              END
+            ),
+            0
+          ) / 3600,
+          2
+        ) AS hoursCompleted
+      FROM attendance a
+      LEFT JOIN students s ON s.student_id = a.student_id
+      WHERE a.student_id = ?
+        AND (? IS NULL OR a.academic_year_id = ?)
+    `, [safeStudentId, effectiveYearId, effectiveYearId]);
+
+    const [recentAttendance] = await db.query(`
+      SELECT
+        a.attendance_id,
+        a.attendance_date AS date,
+        a.time_in,
+        CASE WHEN a.is_early = 1 THEN a.time_in ELSE NULL END AS actual_time_in,
+        a.lunch_break_start,
+        a.lunch_break_end,
+        a.time_out,
+        a.ot_time_in,
+        a.ot_time_out,
+        a.location_status,
+        a.is_early,
+        a.early_status,
+        CASE
+          WHEN a.is_early = 1 AND a.time_in IS NOT NULL AND s.start_time IS NOT NULL
+            THEN GREATEST(
+              0,
+              ROUND(TIME_TO_SEC(TIMEDIFF(s.start_time, a.time_in)) / 60)
             )
-        ) / 3600,
-        2
-      ) AS hours
-
-    FROM attendance
-
-    WHERE student_id = ?
-
-    ORDER BY
-      attendance_date DESC,
-      attendance_id DESC
-
-    LIMIT 5
-  `, [student_id]);
+          ELSE NULL
+        END AS early_minutes,
+        s.start_time,
+        s.end_time,
+        CASE
+          WHEN a.location_status = 'flagged' THEN 0
+          ELSE ROUND(${totalSecondsExpr} / 3600, 2)
+        END AS hours
+      FROM attendance a
+      LEFT JOIN students s ON s.student_id = a.student_id
+      WHERE a.student_id = ?
+        AND (? IS NULL OR a.academic_year_id = ?)
+      ORDER BY
+        a.attendance_date DESC,
+        a.attendance_id DESC
+      LIMIT 5
+    `, [safeStudentId, effectiveYearId, effectiveYearId]);
 
     return {
       student,
-
-      attendanceDays:
-        summary.attendanceDays || 0,
-
-      attendanceRecords:
-        summary.attendanceRecords || 0,
-
-      lastAttendance:
-        summary.lastAttendance,
-
-      hoursCompleted:
-        summary.hoursCompleted || 0,
-
+      attendanceDays: summary.attendanceDays || 0,
+      attendanceRecords: summary.attendanceRecords || 0,
+      lastAttendance: summary.lastAttendance,
+      hoursCompleted: summary.hoursCompleted || 0,
       recentAttendance
     };
   }

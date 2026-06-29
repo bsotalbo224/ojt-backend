@@ -16,16 +16,43 @@ const BUSINESS_ERRORS = [
   "No active attendance",
   "Already timed in",
   "Already timed out",
+  "Time in first",
+  "Lunch break not required for this shift",
   "Lunch break not started",
   "Lunch break already started",
   "Lunch break already ended",
   "OT already started",
-  "Attendance already completed"
+  "Attendance already completed",
+  "Attendance not found or unauthorized",
+  "Early attendance request is already processed or not found",
+  "Reason is required for early attendance.",
+  "Attachment is required for early attendance."
 ];
 
+/* ===================================================
+SHARED ROUTE ERROR HANDLER
+Logs the error, returns 400 for known business validation
+errors (using their exact message), and falls back to 500
+with a generic message for anything unexpected.
+=================================================== */
+function handleRouteError(res, err, logLabel, fallbackMessage = "Server error") {
+  console.error(`${logLabel}:`, err);
+
+  if (BUSINESS_ERRORS.includes(err.message)) {
+    return res.status(400).json({
+      message: err.message
+    });
+  }
+
+  return res.status(500).json({
+    message: fallbackMessage
+  });
+}
 
 function mapAttendanceRow(r) {
   return {
+    attendance_id: r.attendance_id,
+
     id: r.attendance_id,
 
     date: r.attendance_date,
@@ -87,12 +114,7 @@ router.get("/student", requireRole("student"), async (req, res) => {
     res.json(data);
 
   } catch (err) {
-
-    console.error("STUDENT ATTENDANCE ERROR:", err);
-
-    res.status(500).json({
-      message: "Server error"
-    });
+    return handleRouteError(res, err, "STUDENT ATTENDANCE ERROR");
   }
 });
 
@@ -109,12 +131,7 @@ router.get("/coordinator", requireRole("coordinator"), async (req, res) => {
     res.json(data);
 
   } catch (err) {
-
-    console.error("COORD ATTENDANCE ERROR:", err);
-
-    res.status(500).json({
-      message: "Server error"
-    });
+    return handleRouteError(res, err, "COORD ATTENDANCE ERROR");
   }
 });
 
@@ -133,21 +150,14 @@ router.get(
       const data =
         await AttendanceModel.getStudentAttendanceRecords(
           studentId,
-          req.user.academic_year_id
+          req.user.academic_year_id,
+          req.user.department_id
         );
 
       res.json(data);
 
     } catch (err) {
-
-      console.error(
-        "STUDENT ATTENDANCE RECORDS ERROR:",
-        err
-      );
-
-      res.status(500).json({
-        message: "Server error"
-      });
+      return handleRouteError(res, err, "STUDENT ATTENDANCE RECORDS ERROR");
     }
   }
 );
@@ -163,12 +173,7 @@ router.get("/admin", requireRole("admin"), async (req, res) => {
     res.json(data);
 
   } catch (err) {
-
-    console.error("ADMIN ATTENDANCE ERROR:", err);
-
-    res.status(500).json({
-      message: "Server error"
-    });
+    return handleRouteError(res, err, "ADMIN ATTENDANCE ERROR");
   }
 });
 
@@ -209,21 +214,7 @@ router.post(
       });
 
     } catch (err) {
-
-      console.error("TIMEIN ERROR:", err);
-
-      if (
-        err.message === "Reason is required for early attendance." ||
-        err.message === "Attachment is required for early attendance."
-      ) {
-        return res.status(400).json({
-          message: err.message
-        });
-      }
-
-      res.status(500).json({
-        message: err.message || "Server error"
-      });
+      return handleRouteError(res, err, "TIMEIN ERROR");
     }
   }
 );
@@ -243,18 +234,7 @@ router.patch("/lunch/start", requireRole("student"), async (req, res) => {
     });
 
   } catch (err) {
-
-    console.error("LUNCH START ERROR:", err);
-
-    if (BUSINESS_ERRORS.includes(err.message)) {
-      return res.status(400).json({
-        message: err.message
-      });
-    }
-
-    res.status(500).json({
-      message: err.message || "Server error"
-    });
+    return handleRouteError(res, err, "LUNCH START ERROR");
   }
 });
 
@@ -273,18 +253,7 @@ router.patch("/lunch/end", requireRole("student"), async (req, res) => {
     });
 
   } catch (err) {
-
-    console.error("LUNCH END ERROR:", err);
-
-    if (BUSINESS_ERRORS.includes(err.message)) {
-      return res.status(400).json({
-        message: err.message
-      });
-    }
-
-    res.status(500).json({
-      message: err.message || "Server error"
-    });
+    return handleRouteError(res, err, "LUNCH END ERROR");
   }
 });
 
@@ -303,18 +272,7 @@ router.patch("/timeout", requireRole("student"), async (req, res) => {
     });
 
   } catch (err) {
-
-    console.error("TIMEOUT ERROR:", err);
-
-    if (BUSINESS_ERRORS.includes(err.message)) {
-      return res.status(400).json({
-        message: err.message
-      });
-    }
-
-    res.status(500).json({
-      message: err.message || "Server error"
-    });
+    return handleRouteError(res, err, "TIMEOUT ERROR");
   }
 });
 
@@ -359,54 +317,8 @@ router.get("/history", requireRole("student"), async (req, res) => {
     // TODAY
     // =========================
     const today = todayRow
-      ? {
-          id: todayRow.attendance_id,
-
-          date: todayRow.attendance_date,
-
-          time_in:
-            todayRow.display_time_in ?? todayRow.time_in,
-
-          lunch_break_start:
-            todayRow.lunch_break_start,
-
-          lunch_break_end:
-            todayRow.lunch_break_end,
-
-          time_out:
-            todayRow.time_out,
-
-          ot_time_in:
-            todayRow.ot_time_in,
-
-          ot_time_out:
-            todayRow.ot_time_out,
-
-          start_time:
-            todayRow.start_time,
-
-          end_time:
-            todayRow.end_time,
-
-          early_attendance:
-            todayRow.early_attendance,
-
-          early_reason:
-            todayRow.early_reason,
-
-          early_status:
-            todayRow.early_status,
-
-          early_attachment_url:
-            todayRow.early_attachment_url,
-
-          early_attachment_public_id:
-            todayRow.early_attachment_public_id,
-
-          early_attachment_name:
-            todayRow.early_attachment_name
-        }
-      : null;
+  ? mapAttendanceRow(todayRow)
+  : null;
 
     // =========================
     // HISTORY
@@ -421,15 +333,7 @@ router.get("/history", requireRole("student"), async (req, res) => {
     });
 
   } catch (err) {
-
-    console.error(
-      "ATTENDANCE HISTORY ERROR:",
-      err
-    );
-
-    res.status(500).json({
-      success: false
-    });
+    return handleRouteError(res, err, "ATTENDANCE HISTORY ERROR");
   }
 });
 
@@ -456,15 +360,7 @@ router.get("/history/export", requireRole("student"), async (req, res) => {
     });
 
   } catch (err) {
-
-    console.error(
-      "ATTENDANCE HISTORY EXPORT ERROR:",
-      err
-    );
-
-    res.status(500).json({
-      success: false
-    });
+    return handleRouteError(res, err, "ATTENDANCE HISTORY EXPORT ERROR");
   }
 });
 
@@ -480,7 +376,9 @@ router.put("/:id/location-status", requireRole("coordinator"), async (req, res) 
 
     await AttendanceModel.updateLocationStatus(
       id,
-      location_status
+      location_status,
+      req.user.academic_year_id,
+      req.user.department_id
     );
 
     res.json({
@@ -488,15 +386,7 @@ router.put("/:id/location-status", requireRole("coordinator"), async (req, res) 
     });
 
   } catch (err) {
-
-    console.error(
-      "UPDATE LOCATION STATUS ERROR:",
-      err
-    );
-
-    res.status(500).json({
-      message: "Failed to update location status"
-    });
+    return handleRouteError(res, err, "UPDATE LOCATION STATUS ERROR", "Failed to update location status");
   }
 });
 
@@ -514,15 +404,7 @@ router.get("/pending-early", requireRole("coordinator"), async (req, res) => {
     res.json(data);
 
   } catch (err) {
-
-    console.error(
-      "PENDING EARLY ATTENDANCE ERROR:",
-      err
-    );
-
-    res.status(500).json({
-      message: "Failed to fetch pending early attendance"
-    });
+    return handleRouteError(res, err, "PENDING EARLY ATTENDANCE ERROR", "Failed to fetch pending early attendance");
   }
 });
 
@@ -536,7 +418,8 @@ router.patch("/early/:attendanceId/approve", requireRole("coordinator"), async (
 
     await AttendanceModel.approveEarlyAttendance(
       attendanceId,
-      req.user.academic_year_id
+      req.user.academic_year_id,
+      req.user.department_id
     );
 
     res.json({
@@ -545,15 +428,7 @@ router.patch("/early/:attendanceId/approve", requireRole("coordinator"), async (
     });
 
   } catch (err) {
-
-    console.error(
-      "APPROVE EARLY ATTENDANCE ERROR:",
-      err
-    );
-
-    res.status(500).json({
-      message: "Server error"
-    });
+    return handleRouteError(res, err, "APPROVE EARLY ATTENDANCE ERROR");
   }
 });
 
@@ -567,7 +442,8 @@ router.patch("/early/:attendanceId/reject", requireRole("coordinator"), async (r
 
     await AttendanceModel.rejectEarlyAttendance(
       attendanceId,
-      req.user.academic_year_id
+      req.user.academic_year_id,
+      req.user.department_id
     );
 
     res.json({
@@ -576,15 +452,7 @@ router.patch("/early/:attendanceId/reject", requireRole("coordinator"), async (r
     });
 
   } catch (err) {
-
-    console.error(
-      "REJECT EARLY ATTENDANCE ERROR:",
-      err
-    );
-
-    res.status(500).json({
-      message: "Server error"
-    });
+    return handleRouteError(res, err, "REJECT EARLY ATTENDANCE ERROR");
   }
 });
 
