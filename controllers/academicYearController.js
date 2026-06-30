@@ -68,7 +68,6 @@ exports.create = async (req, res) => {
 exports.setActive = async (req, res) => {
   try {
 
-
     await AcademicYearModel.setActive(
       req.params.id
     );
