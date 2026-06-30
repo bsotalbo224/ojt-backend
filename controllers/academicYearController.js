@@ -68,6 +68,8 @@ exports.create = async (req, res) => {
 exports.setActive = async (req, res) => {
   try {
 
+    console.log("SET ACTIVE HIT:", req.params.id);
+
     await AcademicYearModel.setActive(
       req.params.id
     );
