@@ -48,10 +48,15 @@ class StudentModel {
 
     const conn = await db.getConnection();
 
+    let user_id;
+    let studentRes;
+    let activeYear;
+    let plainPassword;
+
     try {
       await conn.beginTransaction();
 
-      const plainPassword = generatePassword(8);
+      plainPassword = generatePassword(8);
       const hashedPassword = await bcrypt.hash(plainPassword, 10);
 
       const [userRes] = await conn.query(
@@ -60,15 +65,15 @@ class StudentModel {
         [f_name, l_name, email, hashedPassword]
       );
 
-      const user_id = userRes.insertId;
+      user_id = userRes.insertId;
 
-      const activeYear = await AcademicYearModel.getActive();
+      activeYear = await AcademicYearModel.getActive();
 
       if (!activeYear) {
         throw new Error("No active academic year found");
       }
 
-      const [studentRes] = await conn.query(
+      [studentRes] = await conn.query(
         `INSERT INTO students (
             user_id,
             course_id,
@@ -90,29 +95,33 @@ class StudentModel {
 
       await conn.commit();
 
-      await sendNotification({
-        user_id,
-        title: "OJT Account Created",
-        message: `Welcome ${f_name}! Your OJT account is ready.`,
-        type: "system",
-        link: "/student/dashboard",
-        academic_year_id: activeYear.academic_year_id
-      });
-
-      await sendStudentCredentials(
-        email,
-        plainPassword,
-        `${f_name} ${l_name}`
-      );
-
-      return studentRes.insertId;
-
     } catch (err) {
       await conn.rollback();
       throw err;
     } finally {
       conn.release();
     }
+
+    sendNotification({
+      user_id,
+      title: "OJT Account Created",
+      message: `Welcome ${f_name}! Your OJT account is ready.`,
+      type: "system",
+      link: "/student/dashboard",
+      academic_year_id: activeYear.academic_year_id
+    }).catch((err) => {
+      console.error("NOTIFICATION ERROR:", err);
+    });
+
+    sendStudentCredentials(
+      email,
+      plainPassword,
+      `${f_name} ${l_name}`
+    ).catch((err) => {
+      console.error("EMAIL ERROR:", err);
+    });
+
+    return studentRes.insertId;
   }
 
   static async update(student_id, data) {
