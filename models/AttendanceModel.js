@@ -330,6 +330,10 @@ class AttendanceModel {
     let early_status = null;
     let early_reason_to_store = null;
 
+    // EFFECTIVE TIME_IN TO PERSIST — defaults to actual clock-in time,
+    // overridden to the schedule start time for minor early arrivals.
+    let effectiveTimeIn = now;
+
     if (!active) {
       const [[student]] = await db.query(`
         SELECT start_time
@@ -345,28 +349,42 @@ class AttendanceModel {
 
         const isNightShift = scheduleMinutes >= 18 * 60;
 
-        let isEarly = false;
+        let isEarlyCandidate = false;
 
         if (isNightShift) {
           if (currentMinutes >= 0 && currentMinutes < 12 * 60) {
-            isEarly = false;
+            isEarlyCandidate = false;
           } else {
-            isEarly = currentMinutes < scheduleMinutes;
+            isEarlyCandidate = currentMinutes < scheduleMinutes;
           }
         } else {
-          isEarly = currentMinutes < scheduleMinutes;
+          isEarlyCandidate = currentMinutes < scheduleMinutes;
         }
 
-        if (isEarly) {
-          if (!early_reason) {
-            throw new Error("Reason is required for early attendance.");
+        if (isEarlyCandidate) {
+          const earlyMinutes = scheduleMinutes - currentMinutes;
+
+          const isMinorEarly =
+            earlyMinutes >= 1 &&
+            earlyMinutes <= 15;
+
+          const isMajorEarly =
+            earlyMinutes > 15;
+
+          if (isMajorEarly) {
+            if (!early_reason) {
+              throw new Error("Reason is required for early attendance.");
+            }
+            if (!early_attachment_url) {
+              throw new Error("Attachment is required for early attendance.");
+            }
+            early_attendance = true;
+            early_status = "pending";
+            early_reason_to_store = early_reason;
+          } else if (isMinorEarly) {
+            // Auto-clock-in at schedule start time, no modal, no reason required.
+            effectiveTimeIn = student.start_time;
           }
-          if (!early_attachment_url) {
-            throw new Error("Attachment is required for early attendance.");
-          }
-          early_attendance = true;
-          early_status = "pending";
-          early_reason_to_store = early_reason;
         }
       }
     }
@@ -391,7 +409,7 @@ class AttendanceModel {
         VALUES (?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         student_id,
-        now,
+        effectiveTimeIn,
         latitude ?? null,
         longitude ?? null,
         location_status,
