@@ -8,28 +8,13 @@ function getPHTime() {
   });
 }
 
-// Safe numeric time comparison helper.
-// Converts a "HH:MM" or "HH:MM:SS" string into total minutes so time
-// values can be compared reliably instead of relying on string
-// comparison (which breaks on inconsistent zero-padding/formats).
+// TIME-TO-MINUTES HELPER
 function toMinutes(time) {
   const [h, m] = String(time).split(":").map(Number);
   return h * 60 + m;
 }
 
-// =========================
 // EFFECTIVE TIME SQL FRAGMENT
-// =========================
-// Reusable CASE expression for computing the effective start time.
-// Rules:
-//   - early_attendance = 1 AND early_status = 'approved' -> use actual a.time_in
-//   - time_in earlier than s.start_time (accounting for night shifts,
-//     pending/rejected/any other status)              -> use s.start_time
-//   - otherwise                                        -> use actual a.time_in
-// Night-shift rule: start_time >= 18:00 AND time_in in 12:00-23:59 is
-// considered early; time_in in 00:00-11:59 belongs to the next calendar
-// day and is NOT treated as early.
-// Requires attendance alias `a` and students alias `s` in scope.
 const EFFECTIVE_TIME_IN_CASE = `
   CASE
     WHEN a.early_attendance = 1
@@ -52,23 +37,7 @@ const EFFECTIVE_TIME_IN_CASE = `
   END
 `;
 
-// =========================
 // HOURS SUM SQL FRAGMENT
-// =========================
-// Full per-row hours expression (regular + OT, lunch-aware, overnight-safe).
-//
-// OVERNIGHT-SAFE: every duration is wrapped in a CASE that detects
-// end < start and adds 24:00:00 via ADDTIME before diffing, so
-// work hours, lunch breaks, and OT all compute correctly across midnight.
-//
-// LUNCH DEDUCTION:
-//   - If both lunch_break_start and lunch_break_end exist -> deduct actual
-//     lunch duration.
-//   - If shift is >= 5 h (18000 s) and lunch times are missing -> deduct
-//     1 h (3600 s) automatically.
-//   - Short shifts (< 5 h) with no recorded lunch -> no deduction.
-//
-// Requires attendance alias `a` and students alias `s` in scope.
 const HOURS_SUM_EXPR = `
   (
     (
@@ -151,16 +120,7 @@ const HOURS_SUM_EXPR = `
 
 class AttendanceModel {
 
-  // =========================
   // ACTIVE ATTENDANCE
-  // =========================
-  // Returns the most recent incomplete attendance record for a student.
-  // "Incomplete" means either:
-  //   (a) timed in but not yet timed out, OR
-  //   (b) timed out but OT has started and not yet ended.
-  //
-  // attendance table has NO academic_year_id column.
-  // Academic year is scoped via JOIN students s WHERE s.academic_year_id = ?.
   static async getActiveAttendance(student_id, academic_year_id) {
 
     const [[row]] = await db.query(`
@@ -185,11 +145,7 @@ class AttendanceModel {
     return row || null;
   }
 
-  // =========================
   // STUDENT ATTENDANCE
-  // =========================
-  // Returns all attendance records for a student in an academic year.
-  // attendance table has NO academic_year_id; filtered via students join.
   static async getByStudent(student_id, academic_year_id) {
 
     const [rows] = await db.query(`
@@ -228,18 +184,7 @@ class AttendanceModel {
     return rows;
   }
 
-  // =========================
   // BY DEPARTMENT
-  // =========================
-  // Returns all attendance records for students in a given department
-  // and academic year.
-  //
-  // Department is sourced from students.department_id — this is the
-  // single source of truth for department filtering. There is no join
-  // to the courses table, so department membership can never be derived
-  // or overridden through course data.
-  //
-  // attendance table has NO academic_year_id; filtered via students join.
   static async getByDepartment(department_id, academic_year_id) {
 
     let sql = `
@@ -292,12 +237,7 @@ class AttendanceModel {
     return (await db.query(sql, [academic_year_id]))[0];
   }
 
-  // =========================
   // CHECK IF LUNCH REQUIRED
-  // =========================
-  // Returns true if the student's shift is 5 or more hours long,
-  // meaning a lunch break is expected.
-  // Handles night shifts (negative TIMEDIFF corrected by adding 24 h).
   static async requiresLunch(student_id, academic_year_id) {
 
     const [[student]] = await db.query(`
@@ -322,8 +262,6 @@ class AttendanceModel {
 
     let shiftHours = Number(hoursRow?.[0]?.shift_hours || 0);
 
-    // Night shift correction: if end_time < start_time, TIMEDIFF is
-    // negative; adding 24 gives the correct duration.
     if (shiftHours < 0) {
       shiftHours += 24;
     }
@@ -331,9 +269,7 @@ class AttendanceModel {
     return shiftHours >= 5;
   }
 
-  // =========================
   // TIME IN / START OT
-  // =========================
   static async timeIn({
     student_id,
     academic_year_id,
@@ -349,9 +285,6 @@ class AttendanceModel {
 
     const active = await this.getActiveAttendance(student_id, academic_year_id);
 
-    // =========================
-    // LOCATION CHECK
-    // =========================
     let location_status = "flagged";
 
     if (latitude !== undefined && longitude !== undefined) {
@@ -393,14 +326,6 @@ class AttendanceModel {
       }
     }
 
-    // =========================
-    // EARLY ATTENDANCE CHECK (only for first time in)
-    // =========================
-    // No threshold: ANY time_in earlier than start_time is early.
-    // Shift-aware: night shifts (start_time >= 6 PM) roll over past
-    // midnight, so a time_in in the early-morning hours (12:00 AM-11:59 AM)
-    // belongs to the shift that already started the previous evening and
-    // must NOT be flagged as early.
     let early_attendance = false;
     let early_status = null;
     let early_reason_to_store = null;
@@ -418,21 +343,17 @@ class AttendanceModel {
         const scheduleMinutes = toMinutes(student.start_time);
         const currentMinutes = toMinutes(now);
 
-        // Night shift = scheduled start at or after 6:00 PM (18 * 60).
         const isNightShift = scheduleMinutes >= 18 * 60;
 
         let isEarly = false;
 
         if (isNightShift) {
-          // 12:00 AM–11:59 AM belongs to the next calendar day and must
-          // NOT be flagged as early for a night shift.
           if (currentMinutes >= 0 && currentMinutes < 12 * 60) {
             isEarly = false;
           } else {
             isEarly = currentMinutes < scheduleMinutes;
           }
         } else {
-          // Day shift: any time_in before start_time is early.
           isEarly = currentMinutes < scheduleMinutes;
         }
 
@@ -450,10 +371,6 @@ class AttendanceModel {
       }
     }
 
-    // =========================
-    // FIRST TIME IN
-    // =========================
-    // attendance table has NO academic_year_id column — do not insert it.
     if (!active) {
 
       const [result] = await db.query(`
@@ -486,19 +403,6 @@ class AttendanceModel {
         early_attachment_name ?? null
       ]);
 
-      // =========================
-      // NOTIFY COORDINATOR IF EARLY
-      // =========================
-      // coordinators table has NO academic_year_id column, so it is never
-      // filtered or joined on academic year — only on department_id.
-      //
-      // There is exactly ONE coordinator per department, so joining
-      // coordinators on s.department_id = c.department_id can match at
-      // most one coordinator row per student. Combined with s.student_id = ?
-      // (which already pins the query to a single student/department),
-      // this join is structurally incapable of producing duplicate rows,
-      // so no DISTINCT or GROUP BY is needed. LIMIT 1 is left in place as
-      // a defensive guard only, not because duplicates are expected.
       if (early_attendance) {
         try {
           const [[studentInfo]] = await db.query(`
@@ -549,16 +453,10 @@ class AttendanceModel {
       return result.insertId;
     }
 
-    // =========================
-    // BLOCK DUPLICATE TIME IN
-    // =========================
     if (active.time_in && !active.time_out) {
       throw new Error("Already timed in");
     }
 
-    // =========================
-    // START OT
-    // =========================
     if (active.time_out && !active.ot_time_in) {
       await db.query(`
         UPDATE attendance
@@ -569,9 +467,6 @@ class AttendanceModel {
       return;
     }
 
-    // =========================
-    // BLOCK DUPLICATE OT
-    // =========================
     if (active.ot_time_in && !active.ot_time_out) {
       throw new Error("OT already started");
     }
@@ -579,9 +474,7 @@ class AttendanceModel {
     throw new Error("Attendance already completed");
   }
 
-  // =========================
   // START LUNCH
-  // =========================
   static async startLunchBreak(student_id, academic_year_id) {
 
     const now = getPHTime();
@@ -617,9 +510,7 @@ class AttendanceModel {
     `, [now, active.attendance_id]);
   }
 
-  // =========================
   // END LUNCH
-  // =========================
   static async endLunchBreak(student_id, academic_year_id) {
 
     const now = getPHTime();
@@ -645,9 +536,7 @@ class AttendanceModel {
     `, [now, active.attendance_id]);
   }
 
-  // =========================
   // TIME OUT / END OT
-  // =========================
   static async timeOutByStudent(student_id, academic_year_id) {
 
     const now = getPHTime();
@@ -658,9 +547,6 @@ class AttendanceModel {
       throw new Error("No active attendance");
     }
 
-    // =========================
-    // REGULAR TIME OUT
-    // =========================
     if (active.time_in && !active.time_out) {
       await db.query(`
         UPDATE attendance
@@ -672,9 +558,6 @@ class AttendanceModel {
       return;
     }
 
-    // =========================
-    // END OT
-    // =========================
     if (active.ot_time_in && !active.ot_time_out) {
       await db.query(`
         UPDATE attendance
@@ -689,18 +572,7 @@ class AttendanceModel {
     throw new Error("Attendance already completed");
   }
 
-  // =========================
   // HOURS COMPUTATION
-  // =========================
-  // Computes total verified hours for a student in an academic year.
-  //
-  // EFFECTIVE TIME RULE (see EFFECTIVE_TIME_IN_CASE above):
-  //   approved early          -> actual time_in counts
-  //   pending/rejected early  -> start_time used instead of time_in
-  //   on-time                 -> actual time_in counts
-  //
-  // Only location_status = 'verified' rows count.
-  // attendance table has NO academic_year_id; filtered via students join.
   static async getHoursByStudent(student_id, academic_year_id) {
 
     const [[row]] = await db.query(`
@@ -725,17 +597,7 @@ class AttendanceModel {
     return row.hours || 0;
   }
 
-  // =========================
   // COMPLETION CHECK
-  // =========================
-  // Checks whether a student has met their required OJT hours and, if so,
-  // sends a one-time completion notification (guarded by a duplicate check).
-  //
-  // Uses the same EFFECTIVE TIME RULE and overnight-safe duration logic
-  // as getHoursByStudent(). Only location_status = 'verified' rows count.
-  //
-  // attendance table has NO academic_year_id; scoped via students join
-  // and the LEFT JOIN ON condition.
   static async checkCompletionAndNotify(student_id, academic_year_id) {
 
     const [[row]] = await db.query(`
@@ -789,13 +651,7 @@ class AttendanceModel {
     });
   }
 
-  // =========================
-  // TODAY
-  // =========================
-  // Returns the student's most recent attendance record (active or last
-  // completed), enriched with display_time_in per the EFFECTIVE TIME RULE.
-  //
-  // attendance table has NO academic_year_id; filtered via students join.
+  // TODAY (fallback query scoped to CURDATE() only)
   static async getToday(student_id, academic_year_id) {
 
     const active = await this.getActiveAttendance(student_id, academic_year_id);
@@ -821,7 +677,6 @@ class AttendanceModel {
         const isNightShift = startMinutes >= 18 * 60;
 
         if (isNightShift) {
-          // 12:00 AM–11:59 AM is next-calendar-day, not early for night shift.
           if (timeInMinutes >= 12 * 60 && timeInMinutes < startMinutes) {
             isEarlierThanStart = true;
           }
@@ -847,7 +702,6 @@ class AttendanceModel {
       };
     }
 
-    // No active session — return the most recent completed record.
     const [rows] = await db.query(`
       SELECT
         a.attendance_id,
@@ -880,6 +734,7 @@ class AttendanceModel {
 
       WHERE a.student_id = ?
         AND s.academic_year_id = ?
+        AND a.attendance_date = CURDATE()
 
       ORDER BY a.attendance_id DESC
       LIMIT 1
@@ -888,12 +743,7 @@ class AttendanceModel {
     return rows[0] || null;
   }
 
-  // =========================
   // HISTORY (PAGINATED)
-  // =========================
-  // Returns verified attendance records for the student, newest first.
-  // location_status = 'flagged' rows are excluded from student-facing history.
-  // attendance table has NO academic_year_id; filtered via students join.
   static async getStudentHistory(
     student_id,
     academic_year_id,
@@ -969,12 +819,7 @@ class AttendanceModel {
     };
   }
 
-  // =========================
   // HISTORY (FULL, UNPAGINATED — FOR EXPORT)
-  // =========================
-  // Returns all verified attendance records for export (e.g. Excel/PDF).
-  // location_status = 'flagged' rows are excluded.
-  // attendance table has NO academic_year_id; filtered via students join.
   static async getStudentHistoryForExport(student_id, academic_year_id) {
 
     const [rows] = await db.query(`
@@ -1019,11 +864,7 @@ class AttendanceModel {
     return rows;
   }
 
-  // =========================
   // UPDATE LOCATION STATUS
-  // =========================
-  // Direct update by attendance_id — no academic_year_id needed here
-  // since attendance_id is already unique.
   static async updateLocationStatus(
     attendance_id,
     location_status,
@@ -1052,22 +893,7 @@ class AttendanceModel {
     console.log("Rows affected:", result.affectedRows);
   }
 
-  // =========================
   // COORDINATOR: STUDENT RECORDS
-  // =========================
-  // Returns raw, real attendance data for coordinator/admin review.
-  // Includes actual time_in and full early-request details — NOT
-  // adjusted by the display/effective-time rules used in student views.
-  //
-  // attendance table has NO academic_year_id; filtered via students join.
-  //
-  // department_id is OPTIONAL:
-  //   - Coordinator request -> pass the coordinator's department_id so
-  //     the query is restricted with s.department_id = ?, preventing a
-  //     coordinator from Department A from pulling records for a
-  //     student_id belonging to Department B.
-  //   - Admin request -> pass null (default) to skip the department
-  //     filter entirely and allow access across all departments.
   static async getStudentAttendanceRecords(
     student_id,
     academic_year_id,
@@ -1138,22 +964,7 @@ class AttendanceModel {
     return rows;
   }
 
-  // =========================
-  // EARLY ATTENDANCE COORDINATOR METHODS
-  // =========================
-
-  // Approves a pending early attendance request.
-  //
-  // Ownership is validated by joining attendance -> students and checking
-  // s.department_id = ?, ensuring coordinators can only approve records
-  // belonging to students in their own department.
-  //
-  // Only transitions from 'pending' are allowed (AND a.early_status = 'pending').
-  // This prevents double-approval and approve-after-reject.
-  //
-  // attendance table has NO academic_year_id; filtered via students join
-  // (s.academic_year_id = ?).
-  // coordinators table has NO academic_year_id — do not reference it here.
+  // EARLY ATTENDANCE: APPROVE
   static async approveEarlyAttendance(
     attendance_id,
     academic_year_id,
@@ -1177,18 +988,7 @@ class AttendanceModel {
     return { success: true };
   }
 
-  // Rejects a pending early attendance request.
-  //
-  // Ownership is validated by joining attendance -> students and checking
-  // s.department_id = ?, ensuring coordinators can only reject records
-  // belonging to students in their own department.
-  //
-  // Only transitions from 'pending' are allowed (AND a.early_status = 'pending').
-  // This prevents double-reject and reject-after-approve.
-  //
-  // attendance table has NO academic_year_id; filtered via students join
-  // (s.academic_year_id = ?).
-  // coordinators table has NO academic_year_id — do not reference it here.
+  // EARLY ATTENDANCE: REJECT
   static async rejectEarlyAttendance(
     attendance_id,
     academic_year_id,
@@ -1212,17 +1012,7 @@ class AttendanceModel {
     return { success: true };
   }
 
-  // Returns all pending early attendance requests for students in the
-  // coordinator's department, scoped to an academic year.
-  //
-  // coordinators table has NO academic_year_id column, so academic year
-  // can never be filtered through coordinators directly — the
-  // coordinators table is not even joined here. Both required filters
-  // (academic year AND department) are applied entirely through the
-  // students join: s.academic_year_id scopes the academic year, and
-  // s.department_id scopes the department. Since there is exactly one
-  // coordinator per department, the caller passing that coordinator's
-  // department_id is sufficient to scope results to that coordinator.
+  // EARLY ATTENDANCE: PENDING LIST
   static async getPendingEarlyAttendance(academic_year_id, department_id) {
 
     const [rows] = await db.query(`
