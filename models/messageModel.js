@@ -373,7 +373,7 @@ const MessageModel = {
           ON cm1.conversation_id = c.conversation_id AND cm1.user_id = ?
         JOIN conversation_members cm2
           ON cm2.conversation_id = c.conversation_id AND cm2.user_id = ?
-        WHERE c.is_group = 0
+        WHERE c.conversation_type = 'private'
         AND c.academic_year_id = ?
         AND (
           SELECT COUNT(*)
@@ -390,8 +390,8 @@ const MessageModel = {
 
       const [convResult] = await conn.execute(
         `INSERT INTO conversations
-           (name, is_group, department_id, academic_year_id, created_by, created_at)
-         VALUES (NULL, 0, NULL, ?, ?, NOW())`,
+           (conversation_name, conversation_type, department_id, academic_year_id, created_by, created_at)
+         VALUES (NULL, 'private', NULL, ?, ?, NOW())`,
         [academicYearId, user1]
       );
 
@@ -864,8 +864,11 @@ const MessageModel = {
     const [rows] = await db.execute(`
       SELECT
         c.conversation_id,
-        c.is_group,
-        c.name,
+        CASE
+          WHEN c.conversation_type = 'group' THEN 1
+          ELSE 0
+        END AS is_group,
+        c.conversation_name AS name,
         c.created_at AS conversation_created_at,
 
         ou.user_id AS user_id,
@@ -907,7 +910,7 @@ const MessageModel = {
           FROM conversation_members ocm
           WHERE ocm.conversation_id = c.conversation_id
           AND ocm.user_id != ?
-          AND c.is_group = 0
+          AND c.conversation_type = 'private'
           LIMIT 1
         )
 
