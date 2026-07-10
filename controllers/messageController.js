@@ -1,262 +1,518 @@
 const MessageModel = require("../models/messageModel");
 const { sendNotification } = require("../services/notificationServices");
 const { io } = require("../server");
-const db = require("../config/db");
 
-/*
-=================================
-SEND MESSAGE
-=================================
-*/
+const MAX_MESSAGE_LENGTH = 5000;
+const ALLOWED_MESSAGE_TYPES = ["text", "file", "system"];
+const ALLOWED_REACTION_CODES = ["like", "love", "laugh", "wow", "sad", "angry"];
+const KNOWN_STATUS_CODES = new Set([400, 401, 403, 404, 409]);
+
+const MENTION_PRIORITY = { everyone: 1, student: 2, coordinator: 2, user: 3 };
+
+const MENTION_MESSAGE_BUILDERS = {
+  user: (name) => `${name} mentioned you in a conversation.`,
+  student: (name) => `${name} mentioned @Student`,
+  coordinator: (name) => `${name} mentioned @Coordinator`,
+  everyone: (name) => `${name} mentioned @everyone`
+};
+
+const REACTION_EVENT_BY_ACTION = {
+  added: "reaction_added",
+  updated: "reaction_updated",
+  removed: "reaction_removed"
+};
+
+// Helpers
+const isValidId = (value) =>
+  Number.isInteger(value) && value > 0;
+
+const isValidOptionalId = (value) => {
+  if (value === undefined || value === null) return true;
+  if (typeof value !== "number" && typeof value !== "string") return false;
+  return isValidId(Number(value));
+};
+
+const isValidMessageType = (value) =>
+  value === undefined || value === null || ALLOWED_MESSAGE_TYPES.includes(value);
+
+const isValidReactionCode = (value) =>
+  typeof value === "string" && ALLOWED_REACTION_CODES.includes(value);
+
+const resolveAcademicYearId = (req) => {
+  const raw = req.headers["x-academic-year-id"] || req.user?.academic_year_id;
+  const parsed = Number(raw);
+  return isValidId(parsed) ? parsed : null;
+};
+
+const fail = (res, status, error) => res.status(status).json({ success: false, error });
+const ok = (res, payload) => res.json({ success: true, ...payload });
+
+const respondToModelError = (res, err, context) => {
+  console.error(context, err);
+
+  if (KNOWN_STATUS_CODES.has(err?.statusCode)) {
+    return fail(res, err.statusCode, err.message);
+  }
+
+  return fail(res, 500, "Server error");
+};
+
+const buildLink = (role, conversationId) => {
+  if (role === "student") return `/student/messages?conversation=${conversationId}`;
+  if (role === "coordinator") return `/coordinator/messages?conversation=${conversationId}`;
+  if (role === "admin") return `/admin/messages?conversation=${conversationId}`;
+  return `/messages?conversation=${conversationId}`;
+};
+
+const sanitizeAttachment = (file) => {
+  if (!file) {
+    return { attachment_name: null, attachment_url: null, attachment_type: null, attachment_size: null };
+  }
+
+  const size = Number(file.size);
+
+  return {
+    attachment_name: typeof file.originalname === "string" ? file.originalname : null,
+    attachment_url: typeof file.path === "string" ? file.path : null,
+    attachment_type: typeof file.mimetype === "string" ? file.mimetype : null,
+    attachment_size: Number.isFinite(size) && size >= 0 ? size : null
+  };
+};
+
+const emitToConversation = (conversationId, event, payload) => {
+  if (!conversationId || !event) return;
+  io.to(`conversation_${conversationId}`).emit(event, payload);
+};
+
+const emitReactionUpdate = (conversationId, event, messageId, userId, reactionCode, summary) => {
+  emitToConversation(conversationId, event, {
+    message_id: messageId,
+    user_id: userId,
+    reaction_code: reactionCode,
+    summary
+  });
+};
+
+const parseAuthorizedRequest = (req, res, conversationId) => {
+  const userId = Number(req.user?.user_id);
+  const academicYearId = resolveAcademicYearId(req);
+
+  if (!isValidId(userId) || !isValidId(conversationId)) {
+    fail(res, 400, "Invalid conversation ID");
+    return null;
+  }
+
+  if (!academicYearId) {
+    fail(res, 400, "Invalid or missing academic year");
+    return null;
+  }
+
+  return { userId, conversationId, academicYearId };
+};
+
+const authorizeConversation = (req, res) =>
+  parseAuthorizedRequest(req, res, Number(req.params.conversationId));
+
+const parseReactionRequest = (req, res) => {
+  const userId = Number(req.user?.user_id);
+  const messageId = Number(req.params.messageId);
+  const academicYearId = resolveAcademicYearId(req);
+
+  if (!isValidId(userId)) {
+    fail(res, 400, "Invalid user ID");
+    return null;
+  }
+
+  if (!isValidId(messageId)) {
+    fail(res, 400, "Invalid message ID");
+    return null;
+  }
+
+  if (!academicYearId) {
+    fail(res, 400, "Invalid or missing academic year");
+    return null;
+  }
+
+  return { userId, messageId, academicYearId };
+};
+
+
+// Notifications
+const buildNotificationPayload = ({ userId, type, title, message, role, conversationId, academicYearId }) => ({
+  user_id: userId,
+  type,
+  title,
+  message,
+  link: buildLink(role, conversationId),
+  academic_year_id: academicYearId
+});
+
+const dispatchNotification = async (event, payload) => {
+  io.to(`user_${payload.user_id}`).emit(event, payload);
+  await sendNotification(payload);
+};
+
+const buildMentionRecipients = (mentions, members, senderId) => {
+  const recipients = new Map();
+
+  const addRecipient = (userId, type) => {
+    if (!userId || userId === senderId) return;
+    const existingType = recipients.get(userId);
+    if (!existingType || MENTION_PRIORITY[type] > MENTION_PRIORITY[existingType]) {
+      recipients.set(userId, type);
+    }
+  };
+
+  for (const mention of mentions) {
+    switch (mention.mention_type) {
+      case "user":
+        addRecipient(mention.mentioned_user_id, "user");
+        break;
+      case "everyone":
+        for (const member of members) addRecipient(member.user_id, "everyone");
+        break;
+      case "student":
+        for (const member of members) {
+          if ((member.role || "").toLowerCase() === "student") {
+            addRecipient(member.user_id, "student");
+          }
+        }
+        break;
+      case "coordinator":
+        for (const member of members) {
+          if ((member.role || "").toLowerCase() === "coordinator") {
+            addRecipient(member.user_id, "coordinator");
+          }
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  return recipients;
+};
+
+const notifyMentions = async (recipients, memberRoleMap, senderName, conversationId, academicYearId) => {
+  if (recipients.size === 0) return;
+
+  await Promise.all([...recipients.entries()].map(([userId, type]) => {
+    const payload = buildNotificationPayload({
+      userId,
+      type: "mention",
+      title: "Mentioned You",
+      message: MENTION_MESSAGE_BUILDERS[type](senderName),
+      role: memberRoleMap.get(userId),
+      conversationId,
+      academicYearId
+    });
+
+    return dispatchNotification("mention_notification", payload);
+  }));
+};
+
+const notifyNewMessage = async (members, senderId, senderName, academicYearId, conversationId, excludeUserIds) => {
+  const recipients = members.filter(
+    (member) => member.user_id !== senderId && !excludeUserIds.has(member.user_id)
+  );
+
+  if (recipients.length === 0) return;
+
+  await Promise.all(recipients.map((member) => {
+    const payload = buildNotificationPayload({
+      userId: member.user_id,
+      type: "message",
+      title: "New Message",
+      message: `${senderName} sent you a message`,
+      role: member.role,
+      conversationId,
+      academicYearId
+    });
+
+    return dispatchNotification("message_notification", payload);
+  }));
+};
+
+
+// Send Message
 exports.sendMessage = async (req, res) => {
   try {
 
-    const senderId = req.user.user_id;
-    const academic_year_id =
-      req.headers["x-academic-year-id"] ||
-      req.user.academic_year_id;
+    const senderId = Number(req.user?.user_id);
+    const academicYearId = resolveAcademicYearId(req);
+
+    if (!isValidId(senderId)) {
+      return fail(res, 400, "Invalid sender ID");
+    }
+
+    if (!academicYearId) {
+      return fail(res, 400, "Invalid or missing academic year");
+    }
 
     const {
       receiver_id,
+      conversation_id,
       message,
       message_type,
       related_log_id,
       related_narrative_id
     } = req.body;
 
-    /* ── VALIDATION ── */
-    if (!receiver_id || !message || !message.trim()) {
-      return res.status(400).json({
-        error: "Receiver and message required"
-      });
+    if (!isValidOptionalId(related_log_id) || !isValidOptionalId(related_narrative_id)) {
+      return fail(res, 400, "Invalid related reference ID");
     }
 
-    if (receiver_id === senderId) {
-      return res.status(400).json({
-        error: "Cannot send message to yourself"
-      });
+    if (!isValidMessageType(message_type)) {
+      return fail(res, 400, "Invalid message type");
     }
 
-    /*
-    =================================
-    SAVE MESSAGE
-    =================================
-    */
+    const attachment = sanitizeAttachment(req.file);
+
+    if (!receiver_id && !conversation_id) {
+      return fail(res, 400, "receiver_id or conversation_id is required");
+    }
+
+    const trimmedMessage = typeof message === "string" ? message.trim() : "";
+    const hasText = trimmedMessage !== "";
+    const hasAttachment = !!attachment.attachment_url;
+
+    if (!hasText && !hasAttachment) {
+      return fail(res, 400, "Message text or attachment is required");
+    }
+
+    if (trimmedMessage.length > MAX_MESSAGE_LENGTH) {
+      return fail(res, 400, `Message exceeds maximum length of ${MAX_MESSAGE_LENGTH} characters`);
+    }
+
+    let conversationId;
+
+    if (conversation_id !== undefined) {
+      conversationId = Number(conversation_id);
+
+      if (!isValidId(conversationId)) {
+        return fail(res, 400, "Invalid conversation ID");
+      }
+
+      const authorized = await MessageModel.isMember(conversationId, senderId, academicYearId);
+
+      if (!authorized) {
+        return fail(res, 403, "You are not a member of this conversation");
+      }
+
+    } else {
+      const receiverId = Number(receiver_id);
+
+      if (!isValidId(receiverId)) {
+        return fail(res, 400, "Invalid receiver ID");
+      }
+
+      if (receiverId === senderId) {
+        return fail(res, 400, "Cannot send message to yourself");
+      }
+
+      conversationId = await MessageModel.getOrCreatePrivateConversation(
+        senderId,
+        receiverId,
+        academicYearId
+      );
+    }
+
     const insertResult = await MessageModel.sendMessage(
       senderId,
-      receiver_id,
-      message,
+      conversationId,
+      hasText ? trimmedMessage : null,
       {
         messageType: message_type,
         relatedLogId: related_log_id,
         relatedNarrativeId: related_narrative_id,
-        academicYearId: academic_year_id
+        academicYearId,
+        attachmentName: attachment.attachment_name,
+        attachmentUrl: attachment.attachment_url,
+        attachmentType: attachment.attachment_type,
+        attachmentSize: attachment.attachment_size
       }
     );
 
-    /*
-    =================================
-    GET FULL MESSAGE (WITH AVATAR)
-    =================================
-    */
-    const [fullMessage] = await db.query(`
-      SELECT
-        m.*,
-        COALESCE(u.f_name, 'System') AS f_name,
-        COALESCE(u.l_name, '') AS l_name,
-        u.photo
-      FROM messages m
-      LEFT JOIN users u
-        ON m.sender_id = u.user_id
-      WHERE m.id = ?
-    `, [insertResult.insertId]);
-
-    io.to(`user_${receiver_id}`).emit("receive_message", fullMessage[0]);
-
-    /*
-    =================================
-    GET RECEIVER ROLE
-    =================================
-    */
-    const [receiver] = await db.query(
-      `SELECT role FROM users WHERE user_id = ?`,
-      [receiver_id]
+    const enrichedMessage = await MessageModel.getEnrichedMessage(
+      insertResult.insertId,
+      senderId,
+      academicYearId
     );
 
-    const receiverRole = receiver?.[0]?.role;
+    emitToConversation(conversationId, "receive_message", enrichedMessage);
 
-    /*
-    =================================
-    GENERATE LINK
-    =================================
-    */
-    let link = `/messages?user=${senderId}`;
+    const senderName = `${enrichedMessage.f_name} ${enrichedMessage.l_name}`.trim() || "Someone";
 
-    if (receiverRole === "student") {
-      link = `/student/messages?user=${senderId}`;
-    }
+    const members = await MessageModel.getConversationMembers(conversationId, academicYearId);
+    const memberRoleMap = new Map(members.map((member) => [member.user_id, member.role]));
 
-    if (receiverRole === "coordinator") {
-      link = `/coordinator/messages?user=${senderId}`;
-    }
+    const mentionRecipients = buildMentionRecipients(enrichedMessage.mentions, members, senderId);
 
-    if (receiverRole === "admin") {
-      link = `/admin/messages?user=${senderId}`;
-    }
+    await notifyMentions(mentionRecipients, memberRoleMap, senderName, conversationId, academicYearId);
+    await notifyNewMessage(members, senderId, senderName, academicYearId, conversationId, new Set(mentionRecipients.keys()));
 
-    /*
-    =================================
-    GET SENDER NAME (FOR NOTIF)
-    =================================
-    */
-    const [senderInfo] = await db.query(
-      `SELECT f_name, l_name FROM users WHERE user_id = ?`,
-      [senderId]
-    );
-
-    const senderName = senderInfo[0]
-      ? `${senderInfo[0].f_name} ${senderInfo[0].l_name}`
-      : "Someone";
-
-    /*
-    =================================
-    SEND NOTIFICATION
-    =================================
-    */
-    await sendNotification({
-      user_id: receiver_id,
-      type: "message",
-      title: "New Message",
-      message: `${senderName} sent you a message`,
-      link,
-      academic_year_id
-    });
-
-    /*
-    =================================
-    RESPONSE
-    =================================
-    */
-    res.json({
-      success: true,
-      message: "Message sent successfully",
-      data: fullMessage[0]
-    });
+    return ok(res, { message: "Message sent successfully", data: enrichedMessage });
 
   } catch (error) {
 
-    console.error("Send message error:", error);
-
-    res.status(500).json({
-      error: "Server error"
-    });
+    return respondToModelError(res, error, "Send message error:");
 
   }
 };
 
 
-/*
-=================================
-GET SINGLE CONVERSATION
-=================================
-*/
+// Conversation
 exports.getConversation = async (req, res) => {
   try {
 
-    const currentUser = req.user.user_id;
-    const otherUser = req.params.userId;
+    const auth = authorizeConversation(req, res);
+    if (!auth) return;
 
-    /* ── AUTO MARK AS READ ── */
-    await MessageModel.markAsRead(otherUser, currentUser);
+    const { userId, conversationId, academicYearId } = auth;
 
-    const academic_year_id =
-      req.headers["x-academic-year-id"] ||
-      req.user.academic_year_id;
+    await MessageModel.markConversationRead(conversationId, userId, academicYearId);
 
-    const messages = await MessageModel.getConversation(
-      currentUser,
-      otherUser,
-      academic_year_id
+    const messages = await MessageModel.getMessagesByConversation(
+      conversationId,
+      userId,
+      academicYearId
     );
-    res.json(messages);
+
+    return ok(res, { messages });
 
   } catch (error) {
 
-    console.error("Get conversation error:", error);
-
-    res.status(500).json({
-      success: false,
-      error: "Server error"
-    });
+    return respondToModelError(res, error, "Get conversation error:");
 
   }
 };
 
 
-/*
-=================================
-MARK MESSAGES AS READ
-=================================
-*/
+// Read
 exports.markAsRead = async (req, res) => {
   try {
 
-    const receiver = req.user.user_id;
-    const sender = req.params.userId;
+    const auth = authorizeConversation(req, res);
+    if (!auth) return;
 
-    await MessageModel.markAsRead(sender, receiver);
+    const { userId, conversationId, academicYearId } = auth;
 
-    res.json({
-      success: true
-    });
+    await MessageModel.markConversationRead(conversationId, userId, academicYearId);
+
+    return ok(res, {});
 
   } catch (error) {
 
-    console.error("Mark as read error:", error);
-
-    res.status(500).json({
-      success: false,
-      error: "Server error"
-    });
+    return respondToModelError(res, error, "Mark as read error:");
 
   }
 };
 
 
-/*
-=================================
-GET CONVERSATION LIST
-=================================
-*/
-exports.getConversations = async (req, res) => {
+// Reactions
+exports.toggleReaction = async (req, res) => {
   try {
 
-    const userId = req.user.user_id;
-    const role = req.user.role || [];
+    const auth = parseReactionRequest(req, res);
+    if (!auth) return;
 
-    const academic_year_id =
-      req.headers["x-academic-year-id"] ||
-      req.user.academic_year_id;
+    const { userId, messageId, academicYearId } = auth;
+    const { reaction_code } = req.body;
 
-    const conversations = await MessageModel.getConversations(
+    if (!isValidReactionCode(reaction_code)) {
+      return fail(res, 400, `reaction_code must be one of: ${ALLOWED_REACTION_CODES.join(", ")}`);
+    }
+
+    const result = await MessageModel.toggleReaction(messageId, userId, reaction_code, academicYearId);
+    const conversationId = await MessageModel.getConversationIdByMessage(messageId, academicYearId);
+
+    emitReactionUpdate(
+      conversationId,
+      REACTION_EVENT_BY_ACTION[result.action],
+      messageId,
       userId,
-      role,
-      academic_year_id
+      result.reaction_code,
+      result.summary
     );
 
-    res.json({
-      success: true,
-      conversations
+    return ok(res, {
+      action: result.action,
+      reaction_code: result.reaction_code,
+      summary: result.summary
     });
 
   } catch (error) {
 
-    console.error("Get conversations error:", error);
+    return respondToModelError(res, error, "Toggle reaction error:");
 
-    res.status(500).json({
-      success: false,
-      error: "Server error"
-    });
+  }
+};
+
+exports.removeReaction = async (req, res) => {
+  try {
+
+    const auth = parseReactionRequest(req, res);
+    if (!auth) return;
+
+    const { userId, messageId, academicYearId } = auth;
+
+    const summary = await MessageModel.removeReaction(messageId, userId, academicYearId);
+    const conversationId = await MessageModel.getConversationIdByMessage(messageId, academicYearId);
+
+    emitReactionUpdate(conversationId, "reaction_removed", messageId, userId, null, summary);
+
+    return ok(res, { summary });
+
+  } catch (error) {
+
+    return respondToModelError(res, error, "Remove reaction error:");
+
+  }
+};
+
+exports.getMessageReactions = async (req, res) => {
+  try {
+
+    const auth = parseReactionRequest(req, res);
+    if (!auth) return;
+
+    const { userId, messageId, academicYearId } = auth;
+
+    const summary = await MessageModel.getMessageReactions(messageId, userId, academicYearId);
+
+    return ok(res, { summary });
+
+  } catch (error) {
+
+    return respondToModelError(res, error, "Get message reactions error:");
+
+  }
+};
+
+
+// Conversation List
+exports.getConversations = async (req, res) => {
+  try {
+
+    const userId = Number(req.user?.user_id);
+
+    if (!isValidId(userId)) {
+      return fail(res, 400, "Invalid user ID");
+    }
+
+    const academicYearId = resolveAcademicYearId(req);
+
+    if (!academicYearId) {
+      return fail(res, 400, "Invalid or missing academic year");
+    }
+
+    const conversations = await MessageModel.getConversations(userId, academicYearId);
+
+    return ok(res, { conversations });
+
+  } catch (error) {
+
+    return respondToModelError(res, error, "Get conversations error:");
 
   }
 };

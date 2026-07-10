@@ -34,67 +34,96 @@ const io = new Server(server, {
 });
 
 /* =========================
-   ONLINE USERS STORE
+   PRESENCE TRACKING
 ========================= */
 const onlineUsers = new Map();
+
+const addOnlineUser = (userId, socketId) => {
+  if (!onlineUsers.has(userId)) {
+    onlineUsers.set(userId, new Set());
+  }
+  onlineUsers.get(userId).add(socketId);
+};
+
+const removeOnlineUser = (userId, socketId) => {
+  const sockets = onlineUsers.get(userId);
+  if (!sockets) return;
+
+  sockets.delete(socketId);
+
+  if (sockets.size === 0) {
+    onlineUsers.delete(userId);
+  }
+};
+
+const broadcastOnlineUsers = () => {
+  io.emit("online_users", Array.from(onlineUsers.keys()));
+};
 
 /* =========================
    SOCKET CONNECTION
 ========================= */
 io.on("connection", (socket) => {
-  console.log(" User connected:", socket.id);
 
-  // JOIN
+  // Presence
   socket.on("join", (userId) => {
-    socket.userId = userId;
+    if (!userId) return;
 
+    socket.userId = userId;
     socket.join(`user_${userId}`);
 
-    onlineUsers.set(userId, socket.id);
-
-    io.emit("online_users", Array.from(onlineUsers.keys()));
+    addOnlineUser(userId, socket.id);
+    broadcastOnlineUsers();
   });
 
-  // SEND MESSAGE (KEEP EXISTING)
-  socket.on("send_message", (data) => {
-    const { receiver_id } = data;
-
-    io.to(`user_${receiver_id}`).emit("receive_message", data);
+  // Conversation Rooms
+  socket.on("join_conversation", (conversationId) => {
+    if (!conversationId) return;
+    socket.join(`conversation_${conversationId}`);
   });
 
-  // TYPING INDICATOR
-  socket.on("typing", ({ to }) => {
-    io.to(`user_${to}`).emit("typing", socket.userId);
+  socket.on("leave_conversation", (conversationId) => {
+    if (!conversationId) return;
+    socket.leave(`conversation_${conversationId}`);
   });
 
-  socket.on("stop_typing", ({ to }) => {
-    io.to(`user_${to}`).emit("stop_typing", socket.userId);
+  // Typing
+  socket.on("typing", ({ conversationId } = {}) => {
+    if (!conversationId || !socket.userId) return;
+    socket.to(`conversation_${conversationId}`).emit("typing", {
+      conversationId,
+      userId: socket.userId,
+    });
   });
 
-  // MESSAGE DELIVERED
-  socket.on("message_delivered", ({ messageId, senderId }) => {
+  socket.on("stop_typing", ({ conversationId } = {}) => {
+    if (!conversationId || !socket.userId) return;
+    socket.to(`conversation_${conversationId}`).emit("stop_typing", {
+      conversationId,
+      userId: socket.userId,
+    });
+  });
+
+  // Delivery & Read Receipts
+  socket.on("message_delivered", ({ messageId, senderId } = {}) => {
+    if (!messageId || !senderId) return;
     io.to(`user_${senderId}`).emit("message_delivered", { messageId });
   });
 
-  // MESSAGE SEEN
-  socket.on("message_seen", ({ messageId, senderId }) => {
+  socket.on("message_seen", ({ messageId, senderId } = {}) => {
+    if (!messageId || !senderId) return;
     io.to(`user_${senderId}`).emit("message_seen", { messageId });
   });
 
-  // DISCONNECT
+  // Disconnect
   socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id);
-
     if (socket.userId) {
-      onlineUsers.delete(socket.userId);
-      io.emit("online_users", Array.from(onlineUsers.keys()));
+      removeOnlineUser(socket.userId, socket.id);
+      broadcastOnlineUsers();
     }
   });
 });
 
-/* =========================
-   EXPORT IO (IMPORTANT)
-========================= */
 module.exports.io = io;
 
 //////////////////////////////////////////////////////
