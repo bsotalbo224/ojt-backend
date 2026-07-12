@@ -5,6 +5,14 @@ const messageController = require("../controllers/messageController");
 const { requireAuth } = require("../middleware/authMiddleware");
 const upload = require("../middleware/uploadMiddleware");
 
+// Consultation Contacts
+router.route("/contacts")
+  .get(requireAuth, messageController.getConsultationContacts);
+
+// Private Conversation
+router.route("/private")
+  .post(requireAuth, messageController.getOrCreatePrivateConversation);
+
 // Conversations
 router.route("/conversations")
   .get(requireAuth, messageController.getConversations);

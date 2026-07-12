@@ -38,6 +38,7 @@ const isNullableOrPositiveInt = (value) => value === null || value === undefined
 
 const ALLOWED_MESSAGE_TYPES = new Set(["text", "file", "system"]);
 const ALLOWED_REACTION_CODES = new Set(["like", "love", "laugh", "wow", "sad", "angry"]);
+const ALLOWED_CONSULTATION_ROLES = new Set(["student", "coordinator", "admin"]);
 
 const MAX_MENTION_WORDS = 5;
 const MENTION_WORD = "[A-Za-z]+(?:[-'.][A-Za-z]+)*\\.?";
@@ -337,6 +338,95 @@ const enrichMessageRows = async (rows) => {
   }));
 };
 
+// Consultation Contacts
+const buildConsultationContactsQuery = (targetUsersSql) => `
+  SELECT
+    t.user_id,
+    t.f_name,
+    t.l_name,
+    t.photo,
+    t.role,
+    pc.conversation_id AS conversation_id,
+    lm.message AS last_message,
+    lm.created_at AS last_message_time,
+    COALESCE(uc.unread_count, 0) AS unread_count
+  FROM (${targetUsersSql}) t
+  LEFT JOIN (
+    SELECT
+      cm1.user_id AS anchor_id,
+      cm2.user_id AS other_id,
+      MIN(c.conversation_id) AS conversation_id
+    FROM conversation_members cm1
+    JOIN conversation_members cm2
+      ON cm2.conversation_id = cm1.conversation_id
+     AND cm2.user_id != cm1.user_id
+    JOIN conversations c
+      ON c.conversation_id = cm1.conversation_id
+    WHERE c.conversation_type = 'private'
+    AND c.academic_year_id = ?
+    AND cm1.user_id = ?
+    GROUP BY cm1.user_id, cm2.user_id
+  ) pc ON pc.other_id = t.user_id
+  LEFT JOIN messages lm
+    ON lm.message_id = (
+      SELECT m.message_id
+      FROM messages m
+      WHERE m.conversation_id = pc.conversation_id
+      AND m.academic_year_id = ?
+      ORDER BY m.created_at DESC, m.message_id DESC
+      LIMIT 1
+    )
+  LEFT JOIN (
+    SELECT m2.conversation_id, COUNT(*) AS unread_count
+    FROM messages m2
+    WHERE m2.academic_year_id = ?
+    AND (m2.sender_id != ? OR m2.sender_id IS NULL)
+    AND NOT EXISTS (
+      SELECT 1
+      FROM message_reads mr
+      WHERE mr.message_id = m2.message_id
+      AND mr.user_id = ?
+    )
+    GROUP BY m2.conversation_id
+  ) uc ON uc.conversation_id = pc.conversation_id
+  ORDER BY COALESCE(lm.created_at, '1970-01-01') DESC, t.f_name ASC, t.user_id ASC
+`;
+
+const buildConsultationTargetQuery = (role) => {
+  if (role === "student") {
+    return `
+      SELECT DISTINCT u.user_id, u.f_name, u.l_name, u.photo, u.role
+      FROM students s
+      JOIN coordinators co
+        ON co.department_id = s.department_id
+      JOIN users u
+        ON u.user_id = co.user_id
+      WHERE s.user_id = ?
+      AND u.role = 'coordinator'
+    `;
+  }
+
+  if (role === "coordinator") {
+    return `
+      SELECT DISTINCT u.user_id, u.f_name, u.l_name, u.photo, u.role
+      FROM coordinators c
+      JOIN students s
+        ON s.department_id = c.department_id
+      JOIN users u
+        ON u.user_id = s.user_id
+      WHERE c.user_id = ?
+      AND u.role = 'student'
+    `;
+  }
+
+  return `
+    SELECT DISTINCT u.user_id, u.f_name, u.l_name, u.photo, u.role
+    FROM users u
+    WHERE u.role IN ('student', 'coordinator')
+    AND u.user_id != ?
+  `;
+};
+
 const MessageModel = {
 
   // Private Conversation
@@ -380,6 +470,7 @@ const MessageModel = {
           FROM conversation_members cm
           WHERE cm.conversation_id = c.conversation_id
         ) = 2
+        ORDER BY c.created_at ASC, c.conversation_id ASC
         LIMIT 1
       `, [user1, user2, academicYearId]);
 
@@ -468,6 +559,10 @@ const MessageModel = {
 
     try {
       await conn.beginTransaction();
+
+      if (senderId) {
+        await assertConversationAccess(conn, conversationId, senderId, academicYearId);
+      }
 
       const [result] = await conn.execute(
         `INSERT INTO messages
@@ -954,6 +1049,45 @@ const MessageModel = {
         unread_count: row.unread_count
       };
     });
+  },
+
+
+  // Consultation Contacts
+  async getConsultationContacts(userId, role, academicYearId) {
+
+    if (!isPositiveInt(userId) || !isPositiveInt(academicYearId)) {
+      throw new ValidationError("userId and academicYearId must be positive integers");
+    }
+
+    if (typeof role !== "string" || !ALLOWED_CONSULTATION_ROLES.has(role)) {
+      throw new ValidationError(`role must be one of: ${[...ALLOWED_CONSULTATION_ROLES].join(", ")}`);
+    }
+
+    const targetUsersSql = buildConsultationTargetQuery(role);
+    const query = buildConsultationContactsQuery(targetUsersSql);
+
+    const targetParams = [userId];
+
+    const pcParams = [academicYearId, userId];
+    const lmParams = [academicYearId];
+    const ucParams = [academicYearId, userId, userId];
+
+    const params = [...targetParams, ...pcParams, ...lmParams, ...ucParams];
+
+    const [rows] = await db.execute(query, params);
+
+    return rows.map((row) => ({
+      conversation_id: row.conversation_id ?? null,
+      is_group: 0,
+      user_id: row.user_id,
+      f_name: row.f_name,
+      l_name: row.l_name,
+      photo: row.photo,
+      role: row.role,
+      last_message: row.last_message,
+      last_message_time: row.last_message_time,
+      unread_count: row.unread_count
+    }));
   }
 
 };

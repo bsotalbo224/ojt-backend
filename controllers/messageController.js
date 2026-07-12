@@ -5,6 +5,7 @@ const { io } = require("../server");
 const MAX_MESSAGE_LENGTH = 5000;
 const ALLOWED_MESSAGE_TYPES = ["text", "file", "system"];
 const ALLOWED_REACTION_CODES = ["like", "love", "laugh", "wow", "sad", "angry"];
+const ALLOWED_CONSULTATION_ROLES = ["student", "coordinator", "admin"];
 const KNOWN_STATUS_CODES = new Set([400, 401, 403, 404, 409]);
 
 const MENTION_PRIORITY = { everyone: 1, student: 2, coordinator: 2, user: 3 };
@@ -37,6 +38,9 @@ const isValidMessageType = (value) =>
 
 const isValidReactionCode = (value) =>
   typeof value === "string" && ALLOWED_REACTION_CODES.includes(value);
+
+const isValidConsultationRole = (value) =>
+  typeof value === "string" && ALLOWED_CONSULTATION_ROLES.includes(value);
 
 const resolveAcademicYearId = (req) => {
   const raw = req.headers["x-academic-year-id"] || req.user?.academic_year_id;
@@ -513,6 +517,78 @@ exports.getConversations = async (req, res) => {
   } catch (error) {
 
     return respondToModelError(res, error, "Get conversations error:");
+
+  }
+};
+
+
+// Consultation Contacts
+exports.getConsultationContacts = async (req, res) => {
+  try {
+
+    const userId = Number(req.user?.user_id);
+    const role = req.user?.role;
+    const academicYearId = resolveAcademicYearId(req);
+
+    if (!isValidId(userId)) {
+      return fail(res, 400, "Invalid user ID");
+    }
+
+    if (!isValidConsultationRole(role)) {
+      return fail(res, 400, `role must be one of: ${ALLOWED_CONSULTATION_ROLES.join(", ")}`);
+    }
+
+    if (!academicYearId) {
+      return fail(res, 400, "Invalid or missing academic year");
+    }
+
+    const contacts = await MessageModel.getConsultationContacts(userId, role, academicYearId);
+
+    return ok(res, { contacts });
+
+  } catch (error) {
+
+    return respondToModelError(res, error, "Get consultation contacts error:");
+
+  }
+};
+
+
+// Private Conversation
+exports.getOrCreatePrivateConversation = async (req, res) => {
+  try {
+
+    const senderId = Number(req.user?.user_id);
+    const receiverId = Number(req.body.user_id);
+    const academicYearId = resolveAcademicYearId(req);
+
+    if (!isValidId(senderId)) {
+      return fail(res, 400, "Invalid sender ID");
+    }
+
+    if (!isValidId(receiverId)) {
+      return fail(res, 400, "Invalid receiver ID");
+    }
+
+    if (!academicYearId) {
+      return fail(res, 400, "Invalid or missing academic year");
+    }
+
+    if (receiverId === senderId) {
+      return fail(res, 400, "Cannot start a conversation with yourself");
+    }
+
+    const conversationId = await MessageModel.getOrCreatePrivateConversation(
+      senderId,
+      receiverId,
+      academicYearId
+    );
+
+    return ok(res, { conversation_id: conversationId });
+
+  } catch (error) {
+
+    return respondToModelError(res, error, "Get or create private conversation error:");
 
   }
 };
