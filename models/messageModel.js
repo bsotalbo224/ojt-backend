@@ -548,7 +548,8 @@ const MessageModel = {
       throw new ValidationError("relatedNarrativeId must be null or a positive integer");
     }
 
-    const hasText = typeof message === "string" && message.trim() !== "";
+    const normalizedMessage = typeof message === "string" ? message.trim() : "";
+    const hasText = normalizedMessage !== "";
     const hasAttachment = !!attachmentUrl;
 
     if (!hasText && !hasAttachment) {
@@ -583,7 +584,7 @@ const MessageModel = {
         [
           senderId,
           conversationId,
-          hasText ? message.trim() : null,
+          normalizedMessage,
           attachmentName,
           attachmentUrl,
           attachmentType,
@@ -607,7 +608,7 @@ const MessageModel = {
 
       if (hasText) {
         const members = await fetchConversationMembers(conn, conversationId, academicYearId);
-        const mentions = extractMentionsFromMessage(message.trim(), members);
+        const mentions = extractMentionsFromMessage(normalizedMessage, members);
         await insertMentionRecords(conn, messageId, mentions);
       }
 

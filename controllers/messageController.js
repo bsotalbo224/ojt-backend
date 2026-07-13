@@ -324,7 +324,7 @@ exports.sendMessage = async (req, res) => {
     const insertResult = await MessageModel.sendMessage(
       senderId,
       conversationId,
-      hasText ? trimmedMessage : null,
+      trimmedMessage,
       {
         messageType: message_type,
         relatedLogId: related_log_id,
