@@ -68,20 +68,16 @@ const buildLink = (role, conversationId) => {
   return `/messages?conversation=${conversationId}`;
 };
 
-const sanitizeAttachment = (file) => {
-  if (!file) {
-    return { attachment_name: null, attachment_url: null, attachment_type: null, attachment_size: null };
-  }
+// Attachment Transform
+const sanitizeAttachment = (file) => ({
+  attachment_name: file.originalname,
+  attachment_url: file.path,
+  attachment_type: file.mimetype,
+  attachment_size: Number(file.size)
+});
 
-  const size = Number(file.size);
-
-  return {
-    attachment_name: typeof file.originalname === "string" ? file.originalname : null,
-    attachment_url: typeof file.path === "string" ? file.path : null,
-    attachment_type: typeof file.mimetype === "string" ? file.mimetype : null,
-    attachment_size: Number.isFinite(size) && size >= 0 ? size : null
-  };
-};
+// Attachment Transform
+const sanitizeAttachments = (files) => (Array.isArray(files) ? files : []).map(sanitizeAttachment);
 
 const emitToConversation = (conversationId, event, payload) => {
   if (!conversationId || !event) return;
@@ -259,18 +255,24 @@ exports.sendMessage = async (req, res) => {
       message,
       message_type,
       related_log_id,
-      related_narrative_id
+      related_narrative_id,
+      reply_to_message_id
     } = req.body;
 
     if (!isValidOptionalId(related_log_id) || !isValidOptionalId(related_narrative_id)) {
       return fail(res, 400, "Invalid related reference ID");
     }
 
+    if (!isValidOptionalId(reply_to_message_id)) {
+      return fail(res, 400, "Invalid reply_to_message_id");
+    }
+
     if (!isValidMessageType(message_type)) {
       return fail(res, 400, "Invalid message type");
     }
 
-    const attachment = sanitizeAttachment(req.file);
+    // Multer's upload.array("attachments", 10) populates req.files.
+    const attachments = sanitizeAttachments(req.files);
 
     if (!receiver_id && !conversation_id) {
       return fail(res, 400, "receiver_id or conversation_id is required");
@@ -278,7 +280,7 @@ exports.sendMessage = async (req, res) => {
 
     const trimmedMessage = typeof message === "string" ? message.trim() : "";
     const hasText = trimmedMessage !== "";
-    const hasAttachment = !!attachment.attachment_url;
+    const hasAttachment = attachments.length > 0;
 
     if (!hasText && !hasAttachment) {
       return fail(res, 400, "Message text or attachment is required");
@@ -330,18 +332,15 @@ exports.sendMessage = async (req, res) => {
         relatedLogId: related_log_id,
         relatedNarrativeId: related_narrative_id,
         academicYearId,
-        attachmentName: attachment.attachment_name,
-        attachmentUrl: attachment.attachment_url,
-        attachmentType: attachment.attachment_type,
-        attachmentSize: attachment.attachment_size
+        attachments,
+        replyToMessageId:
+          reply_to_message_id == null
+            ? null
+            : Number(reply_to_message_id)
       }
     );
 
-    const enrichedMessage = await MessageModel.getEnrichedMessage(
-      insertResult.insertId,
-      senderId,
-      academicYearId
-    );
+    const enrichedMessage = insertResult.message;
 
     emitToConversation(conversationId, "receive_message", enrichedMessage);
 

@@ -36,6 +36,19 @@ class ConflictError extends Error {
 const isPositiveInt = (value) => Number.isInteger(value) && value > 0;
 const isNullableOrPositiveInt = (value) => value === null || value === undefined || isPositiveInt(value);
 
+// Shared by fetchMentionsForMessages / fetchReactionsForMessages /
+// fetchAttachmentsForMessages / fetchReplySnapshots: normalizes an
+// arbitrary messageIds input down to a deduped array of positive integers,
+// or [] if there's nothing valid to query. Centralizing this avoids each
+// fetch helper re-deriving the same filtered/deduped list independently.
+const toValidUniqueIds = (ids) => {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return [];
+  }
+
+  return [...new Set(ids.filter(isPositiveInt))];
+};
+
 const ALLOWED_MESSAGE_TYPES = new Set(["text", "file", "system"]);
 const ALLOWED_REACTION_CODES = new Set(["like", "love", "laugh", "wow", "sad", "angry"]);
 const ALLOWED_CONSULTATION_ROLES = new Set(["student", "coordinator", "admin"]);
@@ -46,6 +59,11 @@ const MENTION_TOKEN_REGEX = new RegExp(
   `@(${MENTION_WORD}(?:\\s+${MENTION_WORD}){0,${MAX_MENTION_WORDS - 1}})`,
   "g"
 );
+
+// Attachment limits
+const MAX_ATTACHMENTS_PER_MESSAGE = 10;
+const MAX_ATTACHMENT_NAME_LENGTH = 255;
+const MAX_ATTACHMENT_URL_LENGTH = 2048; // keep in sync with the message_attachments.attachment_url column width
 
 const normalizeMentionText = (text) =>
   text.trim().replace(/\s+/g, " ").toLowerCase();
@@ -151,11 +169,7 @@ const insertMentionRecords = async (conn, messageId, mentions) => {
 };
 
 const fetchMentionsForMessages = async (messageIds) => {
-  if (!Array.isArray(messageIds) || messageIds.length === 0) {
-    return new Map();
-  }
-
-  const validIds = [...new Set(messageIds.filter(isPositiveInt))];
+  const validIds = toValidUniqueIds(messageIds);
 
   if (validIds.length === 0) {
     return new Map();
@@ -179,6 +193,209 @@ const fetchMentionsForMessages = async (messageIds) => {
   `, [validIds]);
 
   return groupRowsByKey(rows, "message_id");
+};
+
+// Attachments
+const isPlainObject = (value) =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isNonEmptyStringWithinLength = (value, maxLength) =>
+  typeof value === "string" && value.trim() !== "" && value.length <= maxLength;
+
+// Validates the shape and field-level rules for a single attachment.
+// Throws ValidationError on any violation so malformed data never reaches SQL.
+//
+// Extensibility note: attachment_type is intentionally a free-form string,
+// so richer attachment kinds (image/video/audio) don't require a schema
+// change here. If those kinds later need their own fields (thumbnail_url,
+// duration_seconds, scan_status, etc.), add the checks here and mirror the
+// new fields in normalizeAttachment(), saveMessageAttachments()'s INSERT,
+// and fetchAttachmentsForMessages()'s SELECT. The prepare/dedupe/limit
+// pipeline in prepareAttachments() does not need to change.
+const validateAttachment = (attachment) => {
+  if (!isPlainObject(attachment)) {
+    throw new ValidationError("Each attachment must be an object");
+  }
+
+  const { attachment_name, attachment_url, attachment_type, attachment_size } = attachment;
+
+  if (!isNonEmptyStringWithinLength(attachment_name, MAX_ATTACHMENT_NAME_LENGTH)) {
+    throw new ValidationError(
+      `attachment_name is required and must be a string of at most ${MAX_ATTACHMENT_NAME_LENGTH} characters`
+    );
+  }
+
+  if (!isNonEmptyStringWithinLength(attachment_url, MAX_ATTACHMENT_URL_LENGTH)) {
+    throw new ValidationError(
+      `attachment_url is required and must be a string of at most ${MAX_ATTACHMENT_URL_LENGTH} characters`
+    );
+  }
+
+  if (typeof attachment_type !== "string" || attachment_type.trim() === "") {
+    throw new ValidationError("attachment_type is required and must be a non-empty string");
+  }
+
+  if (!isPositiveInt(attachment_size)) {
+    throw new ValidationError("attachment_size is required and must be a positive integer");
+  }
+};
+
+// Produces a copy of a (already-validated) attachment with its string
+// fields trimmed. This runs after validateAttachment so validation always
+// sees the caller's raw input, but storage and dedupe both operate on the
+// same normalized values (e.g. "file.pdf" and "file.pdf " are the same
+// attachment).
+const normalizeAttachment = (attachment) => ({
+  attachment_name: attachment.attachment_name.trim(),
+  attachment_url: attachment.attachment_url.trim(),
+  attachment_type: attachment.attachment_type.trim(),
+  attachment_size: attachment.attachment_size
+});
+
+const buildAttachmentDedupeKey = (attachment) =>
+  `${attachment.attachment_name}\u0000${attachment.attachment_url}\u0000${attachment.attachment_size}`;
+
+// Single pass over the raw attachments array: enforces array shape, the
+// per-message count limit, rejects null/undefined entries, validates every
+// object's fields, normalizes string fields, and drops duplicates (same
+// name + url + size), keeping the first occurrence. Used by
+// saveMessageAttachments() as the only gate attachment data passes through
+// before an INSERT is attempted.
+const prepareAttachments = (attachments) => {
+  if (!Array.isArray(attachments)) {
+    throw new ValidationError("attachments must be an array");
+  }
+
+  if (attachments.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+    throw new ValidationError(`A message cannot have more than ${MAX_ATTACHMENTS_PER_MESSAGE} attachments`);
+  }
+
+  const seen = new Set();
+  const prepared = [];
+
+  for (const attachment of attachments) {
+    if (attachment === null || attachment === undefined) {
+      throw new ValidationError("attachments cannot contain null or undefined entries");
+    }
+
+    validateAttachment(attachment);
+    const normalized = normalizeAttachment(attachment);
+
+    const dedupeKey = buildAttachmentDedupeKey(normalized);
+    if (seen.has(dedupeKey)) {
+      continue; // duplicate within this request, keep the first occurrence
+    }
+    seen.add(dedupeKey);
+    prepared.push(normalized);
+  }
+
+  return prepared;
+};
+
+// Bulk-inserts every attachment for a single message inside the caller's
+// transaction. No-op when there are no attachments to save. All validation
+// happens here so a failure surfaces inside the existing transaction and
+// triggers the caller's rollback — no partial inserts are possible.
+const saveMessageAttachments = async (conn, messageId, attachments) => {
+  const preparedAttachments = prepareAttachments(attachments);
+
+  if (preparedAttachments.length === 0) {
+    return;
+  }
+
+  const values = preparedAttachments.map((attachment) => [
+    messageId,
+    attachment.attachment_name,
+    attachment.attachment_url,
+    attachment.attachment_type,
+    attachment.attachment_size
+  ]);
+
+  await conn.query(
+    `INSERT INTO message_attachments
+       (message_id, attachment_name, attachment_url, attachment_type, attachment_size)
+     VALUES ?`,
+    [values]
+  );
+};
+
+const fetchAttachmentsForMessages = async (messageIds) => {
+  const validIds = toValidUniqueIds(messageIds);
+
+  if (validIds.length === 0) {
+    return new Map();
+  }
+
+  const [rows] = await db.query(`
+    SELECT
+      attachment_id,
+      message_id,
+      attachment_name,
+      attachment_url,
+      attachment_type,
+      attachment_size,
+      created_at
+    FROM message_attachments
+    WHERE message_id IN (?)
+    ORDER BY message_id ASC, attachment_id ASC
+  `, [validIds]);
+
+  const grouped = groupRowsByKey(rows, "message_id");
+  const byMessage = new Map();
+
+  // Freeze each attachment row and its containing array so callers can't
+  // mutate retrieved data, and give every message_id its own array instance
+  // (never a shared reference).
+  for (const [messageId, attachmentRows] of grouped.entries()) {
+    const frozenRows = attachmentRows.map((row) => Object.freeze({ ...row }));
+    byMessage.set(messageId, Object.freeze(frozenRows));
+  }
+
+  return byMessage;
+};
+
+// Replies
+//
+// Fetches a lightweight "snapshot" of each replied-to message: just enough
+// to render a Messenger-style reply preview (who sent it, what it said,
+// its attachments) without the caller having to make a second round trip.
+// Reuses fetchAttachmentsForMessages() so the attachment shape here is
+// identical to a message's own top-level `attachments`.
+const fetchReplySnapshots = async (replyToMessageIds) => {
+  const validIds = toValidUniqueIds(replyToMessageIds);
+
+  if (validIds.length === 0) {
+    return new Map();
+  }
+
+  const [rows] = await db.query(`
+    SELECT
+      m.message_id,
+      m.sender_id,
+      m.message,
+      COALESCE(u.f_name, 'System') AS f_name,
+      COALESCE(u.l_name, '') AS l_name
+    FROM messages m
+    LEFT JOIN users u
+      ON u.user_id = m.sender_id
+    WHERE m.message_id IN (?)
+  `, [validIds]);
+
+  const attachmentsByMessage = await fetchAttachmentsForMessages(validIds);
+
+  const snapshots = new Map();
+
+  for (const row of rows) {
+    snapshots.set(row.message_id, Object.freeze({
+      message_id: row.message_id,
+      sender_id: row.sender_id,
+      sender_name: `${row.f_name} ${row.l_name}`.trim(),
+      message: row.message,
+      attachments: attachmentsByMessage.get(row.message_id) ?? []
+    }));
+  }
+
+  return snapshots;
 };
 
 const isValidReactionCode = (value) =>
@@ -235,6 +452,34 @@ const assertConversationAccess = async (runner, conversationId, userId, academic
   }
 };
 
+// Validates a reply target inside the caller's transaction: the replied
+// message must exist AND belong to the same conversation as the new
+// message. Returns the validated id (or null when nothing was passed) so
+// callers can insert it directly.
+const resolveReplyToMessageId = async (conn, replyToMessageId, conversationId) => {
+  if (replyToMessageId === null || replyToMessageId === undefined) {
+    return null;
+  }
+
+  if (!isPositiveInt(replyToMessageId)) {
+    throw new ValidationError("replyToMessageId must be null or a positive integer");
+  }
+
+  const [rows] = await conn.execute(`
+    SELECT message_id
+    FROM messages
+    WHERE message_id = ?
+    AND conversation_id = ?
+    LIMIT 1
+  `, [replyToMessageId, conversationId]);
+
+  if (rows.length === 0) {
+    throw new NotFoundError("The message being replied to was not found in this conversation");
+  }
+
+  return replyToMessageId;
+};
+
 const groupReactionRows = (rows) => {
   const grouped = groupRowsByKey(rows, "reaction_code");
 
@@ -268,11 +513,7 @@ const buildMessageReactionSummary = async (runner, messageId) => {
 };
 
 const fetchReactionsForMessages = async (messageIds) => {
-  if (!Array.isArray(messageIds) || messageIds.length === 0) {
-    return new Map();
-  }
-
-  const validIds = [...new Set(messageIds.filter(isPositiveInt))];
+  const validIds = toValidUniqueIds(messageIds);
 
   if (validIds.length === 0) {
     return new Map();
@@ -325,16 +566,25 @@ const enrichMessageRows = async (rows) => {
   }
 
   const messageIds = rows.map((row) => row.message_id);
+  const replyToIds = rows
+    .map((row) => row.reply_to_message_id)
+    .filter(isPositiveInt);
 
-  const [mentionsByMessage, reactionsByMessage] = await Promise.all([
+  const [mentionsByMessage, reactionsByMessage, attachmentsByMessage, replySnapshots] = await Promise.all([
     fetchMentionsForMessages(messageIds),
-    fetchReactionsForMessages(messageIds)
+    fetchReactionsForMessages(messageIds),
+    fetchAttachmentsForMessages(messageIds),
+    fetchReplySnapshots(replyToIds)
   ]);
 
   return rows.map((row) => ({
     ...row,
     mentions: mentionsByMessage.get(row.message_id) || [],
-    reactions: reactionsByMessage.get(row.message_id) || { total: 0, reactions: [] }
+    reactions: reactionsByMessage.get(row.message_id) || { total: 0, reactions: [] },
+    attachments: attachmentsByMessage.get(row.message_id) ?? [],
+    reply_to: isPositiveInt(row.reply_to_message_id)
+      ? (replySnapshots.get(row.reply_to_message_id) ?? null)
+      : null
   }));
 };
 
@@ -526,10 +776,8 @@ const MessageModel = {
       relatedLogId = null,
       relatedNarrativeId = null,
       academicYearId = null,
-      attachmentName = null,
-      attachmentUrl = null,
-      attachmentType = null,
-      attachmentSize = null
+      attachments = [],
+      replyToMessageId = null
     } = options;
 
     if (!isPositiveInt(academicYearId)) {
@@ -548,9 +796,13 @@ const MessageModel = {
       throw new ValidationError("relatedNarrativeId must be null or a positive integer");
     }
 
+    if (!isNullableOrPositiveInt(replyToMessageId)) {
+      throw new ValidationError("replyToMessageId must be null or a positive integer");
+    }
+
     const normalizedMessage = typeof message === "string" ? message.trim() : "";
     const hasText = normalizedMessage !== "";
-    const hasAttachment = !!attachmentUrl;
+    const hasAttachment = Array.isArray(attachments) && attachments.length > 0;
 
     if (!hasText && !hasAttachment) {
       throw new ValidationError("Message must include text or an attachment");
@@ -565,38 +817,40 @@ const MessageModel = {
         await assertConversationAccess(conn, conversationId, senderId, academicYearId);
       }
 
+      // Replies must target a message that exists in this same conversation.
+      const resolvedReplyToMessageId = await resolveReplyToMessageId(conn, replyToMessageId, conversationId);
+
       const [result] = await conn.execute(
         `INSERT INTO messages
        (
          sender_id,
          conversation_id,
          message,
-         attachment_name,
-         attachment_url,
-         attachment_type,
-         attachment_size,
          message_type,
          related_log_id,
          related_narrative_id,
-         academic_year_id
+         academic_year_id,
+         reply_to_message_id
        )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           senderId,
           conversationId,
           normalizedMessage,
-          attachmentName,
-          attachmentUrl,
-          attachmentType,
-          attachmentSize,
           messageType,
           relatedLogId,
           relatedNarrativeId,
-          academicYearId
+          academicYearId,
+          resolvedReplyToMessageId
         ]
       );
 
       const messageId = result.insertId;
+
+      // Full validation (shape, field rules, count limit, duplicates)
+      // happens inside saveMessageAttachments(); any failure here rolls
+      // back the message row inserted above along with everything else.
+      await saveMessageAttachments(conn, messageId, attachments);
 
       if (senderId) {
         await conn.execute(
@@ -613,7 +867,21 @@ const MessageModel = {
       }
 
       await conn.commit();
-      return result;
+
+      // Return the fully enriched message (including reply_to) so callers
+      // — the controller's HTTP response and the Socket.IO broadcast alike
+      // — can use it directly without a follow-up fetch. `result` (with its
+      // `insertId`) is preserved on the returned object for compatibility
+      // with any existing caller that only looked at the raw insert result.
+      const [freshRows] = await db.execute(`
+        ${MESSAGE_SELECT_BASE}
+        WHERE m.message_id = ?
+        LIMIT 1
+      `, [senderId, messageId]);
+
+      const [enrichedMessage] = await enrichMessageRows(freshRows);
+
+      return { ...result, message: enrichedMessage };
 
     } catch (err) {
       await conn.rollback();

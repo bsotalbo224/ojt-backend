@@ -25,12 +25,13 @@ router.route("/conversations/:conversationId/read")
 
 // Messages
 router.route("/messages")
-  .post(requireAuth, upload.single("attachment"), messageController.sendMessage);
+  .post(requireAuth, upload.array("attachments", 10), messageController.sendMessage);
 
 // Reactions
 router.route("/messages/:messageId/reactions")
   .get(requireAuth, messageController.getMessageReactions)
   .put(requireAuth, messageController.toggleReaction)
   .delete(requireAuth, messageController.removeReaction);
+
 
 module.exports = router;
