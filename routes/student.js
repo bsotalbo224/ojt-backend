@@ -115,6 +115,7 @@ router.get("/", requireAuth, async (req, res) => {
 });
 
 router.post("/", requireAuth, requireRole("admin", "coordinator"), async (req, res) => {
+    console.log("ROUTE HIT");
   try {
     const courseId = req.body.course_id || req.body.course;
 
