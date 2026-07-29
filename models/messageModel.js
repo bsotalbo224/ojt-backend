@@ -677,6 +677,82 @@ const buildConsultationTargetQuery = (role) => {
   `;
 };
 
+// Department Groups
+//
+// Reusable helpers for Automatic Department Group Management. Each helper
+// has exactly one job and takes `conn` explicitly (not the module-level
+// `db`) so syncDepartmentConversation() (Phase 2) can compose them inside
+// a single transaction. No synchronization logic lives here yet.
+
+// Returns the department group conversation if one exists, else null.
+const fetchDepartmentConversationRow = async (conn, departmentId, academicYearId) => {
+  const [rows] = await conn.execute(`
+    SELECT *
+    FROM conversations
+    WHERE department_id = ?
+    AND academic_year_id = ?
+    AND conversation_type = 'group'
+    LIMIT 1
+  `, [departmentId, academicYearId]);
+
+  return rows[0] || null;
+};
+
+// Returns the department row, or throws NotFoundError.
+const fetchDepartmentOrThrow = async (conn, departmentId) => {
+  const [rows] = await conn.execute(`
+    SELECT *
+    FROM departments
+    WHERE department_id = ?
+    LIMIT 1
+  `, [departmentId]);
+
+  const department = rows[0] || null;
+
+  if (!department) {
+    throw new NotFoundError("Department not found");
+  }
+
+  return department;
+};
+
+// Returns user_ids of active students in a department for an academic year.
+const fetchDepartmentStudentIds = async (conn, departmentId, academicYearId) => {
+  const [rows] = await conn.execute(`
+    SELECT user_id
+    FROM students
+    WHERE department_id = ?
+    AND academic_year_id = ?
+    AND is_active = 1
+  `, [departmentId, academicYearId]);
+
+  return rows.map((row) => row.user_id);
+};
+
+// Returns user_ids of active coordinators in a department.
+// Coordinators are department-scoped, not academic-year scoped.
+const fetchDepartmentCoordinatorIds = async (conn, departmentId) => {
+  const [rows] = await conn.execute(`
+    SELECT user_id
+    FROM coordinators
+    WHERE department_id = ?
+    AND is_active = 1
+  `, [departmentId]);
+
+  return rows.map((row) => row.user_id);
+};
+
+// Returns the current member user_ids of a conversation as a Set.
+const fetchConversationMemberIdSet = async (conn, conversationId) => {
+  const [rows] = await conn.execute(`
+    SELECT user_id
+    FROM conversation_members
+    WHERE conversation_id = ?
+  `, [conversationId]);
+
+  return new Set(rows.map((row) => row.user_id));
+};
+
 const MessageModel = {
 
   // Private Conversation
@@ -1205,6 +1281,173 @@ const MessageModel = {
       total: messageRows.length,
       reactions: groupReactionRows(messageRows)
     }));
+  },
+
+
+  // Department Groups
+  //
+  // Reusable helpers only — no synchronization logic yet. Phase 2's
+  // syncDepartmentConversation() will compose these inside a single
+  // transaction to create/find the department group and reconcile
+  // its membership.
+
+  // Returns the department group conversation, or null if none exists.
+  async getDepartmentConversation(conn, departmentId, academicYearId) {
+
+    if (!isPositiveInt(departmentId) || !isPositiveInt(academicYearId)) {
+      throw new ValidationError("departmentId and academicYearId must be positive integers");
+    }
+
+    return fetchDepartmentConversationRow(conn, departmentId, academicYearId);
+  },
+
+  // Creates the department group conversation and returns the new row.
+  async createDepartmentConversation(conn, departmentId, academicYearId, createdBy = null) {
+
+    if (!isPositiveInt(departmentId) || !isPositiveInt(academicYearId)) {
+      throw new ValidationError("departmentId and academicYearId must be positive integers");
+    }
+
+    if (!isNullableOrPositiveInt(createdBy)) {
+      throw new ValidationError("createdBy must be null or a positive integer");
+    }
+
+    const department = await fetchDepartmentOrThrow(conn, departmentId);
+    const conversationName = `${department.department_name} OJT Consultation`;
+
+    try {
+      const [result] = await conn.execute(
+        `INSERT INTO conversations
+           (conversation_name, conversation_type, department_id, academic_year_id, created_by, created_at)
+         VALUES (?, 'group', ?, ?, ?, NOW())`,
+        [conversationName, departmentId, academicYearId, createdBy]
+      );
+
+      // Fetch the row back so the return shape always matches the table,
+      // not a manually constructed object.
+      return fetchDepartmentConversationRow(conn, departmentId, academicYearId);
+
+    } catch (err) {
+      // (department_id, academic_year_id, conversation_type) is UNIQUE.
+      // A concurrent caller may have created it first — return that row.
+      if (err && err.code === "ER_DUP_ENTRY") {
+        const existing = await fetchDepartmentConversationRow(conn, departmentId, academicYearId);
+
+        if (existing) {
+          return existing;
+        }
+      }
+
+      throw err;
+    }
+  },
+
+  // Returns user_ids of active students in a department/academic year.
+  async getDepartmentStudents(conn, departmentId, academicYearId) {
+
+    if (!isPositiveInt(departmentId) || !isPositiveInt(academicYearId)) {
+      throw new ValidationError("departmentId and academicYearId must be positive integers");
+    }
+
+    return fetchDepartmentStudentIds(conn, departmentId, academicYearId);
+  },
+
+  // Returns user_ids of active coordinators in a department.
+  async getDepartmentCoordinators(conn, departmentId) {
+
+    if (!isPositiveInt(departmentId)) {
+      throw new ValidationError("departmentId must be a positive integer");
+    }
+
+    return fetchDepartmentCoordinatorIds(conn, departmentId);
+  },
+
+  // Returns the current member user_ids of a conversation as a Set.
+  async getConversationMemberIds(conn, conversationId) {
+
+    if (!isPositiveInt(conversationId)) {
+      throw new ValidationError("conversationId must be a positive integer");
+    }
+
+    return fetchConversationMemberIdSet(conn, conversationId);
+  },
+
+  // Reconciles the department group's membership so conversation_members
+  // exactly matches active students + active coordinators. Runs on the
+  // caller's connection/transaction — does not begin, commit, or roll back.
+  async syncDepartmentConversation(conn, departmentId, academicYearId, createdBy = null) {
+
+    if (!isPositiveInt(departmentId) || !isPositiveInt(academicYearId)) {
+      throw new ValidationError("departmentId and academicYearId must be positive integers");
+    }
+
+    if (!isNullableOrPositiveInt(createdBy)) {
+      throw new ValidationError("createdBy must be null or a positive integer");
+    }
+
+    // Find or create the department group.
+    let conversation = await MessageModel.getDepartmentConversation(conn, departmentId, academicYearId);
+
+    if (!conversation) {
+      conversation = await MessageModel.createDepartmentConversation(conn, departmentId, academicYearId, createdBy);
+    }
+
+    const conversationId = conversation.conversation_id;
+
+    // Expected roster: active students + active coordinators.
+    const [studentIds, coordinatorIds] = await Promise.all([
+      MessageModel.getDepartmentStudents(conn, departmentId, academicYearId),
+      MessageModel.getDepartmentCoordinators(conn, departmentId)
+    ]);
+
+    const expectedMemberIds = new Set([...studentIds, ...coordinatorIds]);
+    const currentMemberIds = await MessageModel.getConversationMemberIds(conn, conversationId);
+
+    const membersToAdd = [...expectedMemberIds].filter((userId) => !currentMemberIds.has(userId));
+    const membersToRemove = [...currentMemberIds].filter((userId) => !expectedMemberIds.has(userId));
+
+    if (membersToAdd.length > 0) {
+      // NOW() is generated by MySQL so joined_at stays consistent with the
+      // database server's clock, not the app server's.
+      const placeholders = membersToAdd.map(() => "(?, ?, NOW())").join(", ");
+      const params = membersToAdd.flatMap((userId) => [conversationId, userId]);
+
+      await conn.query(
+        `INSERT IGNORE INTO conversation_members (conversation_id, user_id, joined_at)
+         VALUES ${placeholders}`,
+        params
+      );
+    }
+
+    // Skip the DELETE entirely when there's nothing to remove — guards
+    // against an accidental unbounded DELETE ... IN () if this is ever
+    // refactored.
+    if (membersToRemove.length > 0) {
+      await conn.query(
+        `DELETE FROM conversation_members
+         WHERE conversation_id = ?
+         AND user_id IN (?)`,
+        [conversationId, membersToRemove]
+      );
+    }
+
+    console.log("SYNC EXECUTED", {
+  conversationId,
+  studentIds,
+  coordinatorIds,
+  expected: [...expectedMemberIds],
+  current: [...currentMemberIds],
+  membersToAdd,
+  membersToRemove
+});
+
+    return {
+      conversationId,
+      conversation,
+      addedCount: membersToAdd.length,
+      removedCount: membersToRemove.length,
+      memberCount: expectedMemberIds.size
+    };
   },
 
 

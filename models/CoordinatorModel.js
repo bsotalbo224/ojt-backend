@@ -3,6 +3,8 @@ const bcrypt = require("bcryptjs");
 const { generatePassword } = require("../utils/password");
 const { sendCoordinatorCredentials } = require("../utils/mailer");
 const { sendNotification } = require("../services/notificationServices");
+const MessageModel = require("./messageModel");
+const AcademicYearModel = require("./AcademicYearModel");
 
 const ATTENDANCE_SECONDS_SQL = `
   SELECT
@@ -169,10 +171,14 @@ class CoordinatorModel {
 
     const conn = await db.getConnection();
 
+    let coordRes;
+    let user_id;
+    let plainPassword;
+
     try {
       await conn.beginTransaction();
 
-      const plainPassword = generatePassword(8);
+      plainPassword = generatePassword(8);
       const hashedPassword = await bcrypt.hash(plainPassword, 10);
 
       const [userRes] = await conn.query(
@@ -181,9 +187,9 @@ class CoordinatorModel {
         [f_name, l_name, email, hashedPassword]
       );
 
-      const user_id = userRes.insertId;
+      user_id = userRes.insertId;
 
-      const [coordRes] = await conn.query(
+      [coordRes] = await conn.query(
         `INSERT INTO coordinators (user_id, department_id)
    VALUES (?, ?)`,
         [user_id, department_id]
@@ -194,6 +200,23 @@ class CoordinatorModel {
         `INSERT INTO admins (user_id)
    VALUES (?)`,
         [user_id]
+      );
+
+      // Keep the department consultation group in sync with the newly
+      // created coordinator, inside the same transaction as the inserts
+      // above. Coordinators aren't academic-year scoped, so the active
+      // year is looked up here using the same connection.
+      const activeAcademicYear = await AcademicYearModel.getActive(conn);
+
+      if (!activeAcademicYear) {
+        throw new Error("No active academic year found");
+      }
+
+      await MessageModel.syncDepartmentConversation(
+        conn,
+        department_id,
+        activeAcademicYear.academic_year_id,
+        user_id
       );
 
       await conn.commit();
@@ -228,39 +251,96 @@ class CoordinatorModel {
   static async update(coordinator_id, data) {
     const { f_name, l_name, email, department_id } = data;
 
-    // update user
-    await db.query(
-      `UPDATE users u
-       JOIN coordinators c ON c.user_id = u.user_id
-       SET u.f_name = ?, u.l_name = ?, u.email = ?
-       WHERE c.coordinator_id = ?`,
-      [f_name, l_name, email, coordinator_id]
-    );
+    const conn = await db.getConnection();
 
-    // update coordinator
-    await db.query(
-      `UPDATE coordinators
-       SET department_id = ?
-       WHERE coordinator_id = ?`,
-      [department_id, coordinator_id]
-    );
+    let row;
 
-    // return updated joined row
-    const [[row]] = await db.query(`
-      SELECT 
-        c.coordinator_id,
-        u.f_name,
-        u.l_name,
-        u.email,
-        c.department_id,
-        d.department_code,
-        d.department_name,
-        c.is_active
-      FROM coordinators c
-      JOIN users u ON c.user_id = u.user_id
-      LEFT JOIN departments d ON c.department_id = d.department_id
-      WHERE c.coordinator_id = ?
-    `, [coordinator_id]);
+    try {
+      await conn.beginTransaction();
+
+      // Captured before the update so we can detect a department
+      // transfer and synchronize both the old and new groups below.
+      const [[existing]] = await conn.query(
+        `SELECT department_id FROM coordinators WHERE coordinator_id = ?`,
+        [coordinator_id]
+      );
+
+      const oldDepartmentId = existing ? existing.department_id : null;
+
+      // update user
+      await conn.query(
+        `UPDATE users u
+         JOIN coordinators c ON c.user_id = u.user_id
+         SET u.f_name = ?, u.l_name = ?, u.email = ?
+         WHERE c.coordinator_id = ?`,
+        [f_name, l_name, email, coordinator_id]
+      );
+
+      // update coordinator
+      await conn.query(
+        `UPDATE coordinators
+         SET department_id = ?
+         WHERE coordinator_id = ?`,
+        [department_id, coordinator_id]
+      );
+
+      // Read back the persisted value rather than assuming it matches
+      // the input — triggers, constraints, or normalization could alter it.
+      const [[updated]] = await conn.query(
+        `SELECT department_id FROM coordinators WHERE coordinator_id = ?`,
+        [coordinator_id]
+      );
+
+      const newDepartmentId = updated ? updated.department_id : null;
+
+      // Only re-sync when the coordinator actually moved departments. A
+      // transfer means the old group must lose them and the new group
+      // must gain them.
+      if (oldDepartmentId !== newDepartmentId) {
+        const activeAcademicYear = await AcademicYearModel.getActive(conn);
+
+        if (!activeAcademicYear) {
+          throw new Error("No active academic year found");
+        }
+
+        await MessageModel.syncDepartmentConversation(
+          conn,
+          oldDepartmentId,
+          activeAcademicYear.academic_year_id
+        );
+
+        await MessageModel.syncDepartmentConversation(
+          conn,
+          newDepartmentId,
+          activeAcademicYear.academic_year_id
+        );
+      }
+
+      // return updated joined row
+      [[row]] = await conn.query(`
+        SELECT 
+          c.coordinator_id,
+          u.f_name,
+          u.l_name,
+          u.email,
+          c.department_id,
+          d.department_code,
+          d.department_name,
+          c.is_active
+        FROM coordinators c
+        JOIN users u ON c.user_id = u.user_id
+        LEFT JOIN departments d ON c.department_id = d.department_id
+        WHERE c.coordinator_id = ?
+      `, [coordinator_id]);
+
+      await conn.commit();
+
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
 
     return row;
   }
@@ -270,28 +350,66 @@ class CoordinatorModel {
   // =========================
   static async setStatus(coordinator_id, is_active) {
 
-    await db.query(
-      `UPDATE coordinators
-       SET is_active = ?
-       WHERE coordinator_id = ?`,
-      [is_active, coordinator_id]
-    );
+    const conn = await db.getConnection();
 
-    const [[row]] = await db.query(`
-      SELECT 
-        c.coordinator_id,
-        u.f_name,
-        u.l_name,
-        u.email,
-        c.department_id,
-        d.department_code,
-        d.department_name,
-        c.is_active
-      FROM coordinators c
-      JOIN users u ON c.user_id = u.user_id
-      LEFT JOIN departments d ON c.department_id = d.department_id
-      WHERE c.coordinator_id = ?
-    `, [coordinator_id]);
+    let row;
+
+    try {
+      await conn.beginTransaction();
+
+      await conn.query(
+        `UPDATE coordinators
+         SET is_active = ?
+         WHERE coordinator_id = ?`,
+        [is_active, coordinator_id]
+      );
+
+      const [[coord]] = await conn.query(
+        `SELECT department_id FROM coordinators WHERE coordinator_id = ?`,
+        [coordinator_id]
+      );
+
+      // Re-syncing removes the coordinator from the group when
+      // deactivated and restores them when reactivated. Skip when there's
+      // no valid department to sync against.
+      if (coord?.department_id != null) {
+        const activeAcademicYear = await AcademicYearModel.getActive(conn);
+
+        if (!activeAcademicYear) {
+          throw new Error("No active academic year found");
+        }
+
+        await MessageModel.syncDepartmentConversation(
+          conn,
+          coord.department_id,
+          activeAcademicYear.academic_year_id
+        );
+      }
+
+      [[row]] = await conn.query(`
+        SELECT 
+          c.coordinator_id,
+          u.f_name,
+          u.l_name,
+          u.email,
+          c.department_id,
+          d.department_code,
+          d.department_name,
+          c.is_active
+        FROM coordinators c
+        JOIN users u ON c.user_id = u.user_id
+        LEFT JOIN departments d ON c.department_id = d.department_id
+        WHERE c.coordinator_id = ?
+      `, [coordinator_id]);
+
+      await conn.commit();
+
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
 
     return row;
   }

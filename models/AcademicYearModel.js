@@ -11,8 +11,8 @@ class AcademicYearModel {
     return rows;
   }
 
-  static async getActive() {
-    const [[row]] = await db.query(`
+  static async getActive(conn = db) {
+    const [[row]] = await conn.query(`
       SELECT *
       FROM academic_years
       WHERE is_active = 1

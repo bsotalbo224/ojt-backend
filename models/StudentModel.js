@@ -4,6 +4,7 @@ const { generatePassword } = require("../utils/password");
 const { sendStudentCredentials } = require("../utils/mailer");
 const { sendNotification } = require("../services/notificationServices");
 const AcademicYearModel = require("./AcademicYearModel");
+const MessageModel = require("./messageModel");
 
 class StudentModel {
 
@@ -67,11 +68,25 @@ class StudentModel {
 
       user_id = userRes.insertId;
 
-      activeYear = await AcademicYearModel.getActive();
+      activeYear = await AcademicYearModel.getActive(conn);
 
       if (!activeYear) {
         throw new Error("No active academic year found");
       }
+
+      // Resolve the department up front so it can be used both in the
+      // INSERT below and in syncDepartmentConversation(), avoiding a
+      // second lookup after the student row exists.
+      const [[courseRow]] = await conn.query(
+        `SELECT department_id FROM courses WHERE course_id = ?`,
+        [finalCourseId]
+      );
+
+      if (!courseRow || !courseRow.department_id) {
+        throw new Error("Selected course does not have an associated department");
+      }
+
+      const departmentId = courseRow.department_id;
 
       [studentRes] = await conn.query(
         `INSERT INTO students (
@@ -82,15 +97,17 @@ class StudentModel {
             ojt_hours_required,
             academic_year_id
           )
-          VALUES (
-            ?,
-            ?,
-            (SELECT department_id FROM courses WHERE course_id = ?),
-            ?,
-            ?,
-            ?
-          )`,
-        [user_id, finalCourseId, finalCourseId, company_id || null, finalHours, activeYear.academic_year_id]
+          VALUES (?, ?, ?, ?, ?, ?)`,
+        [user_id, finalCourseId, departmentId, company_id || null, finalHours, activeYear.academic_year_id]
+      );
+
+      // Keep the department consultation group in sync with the newly
+      // created student, inside the same transaction as the insert above.
+      await MessageModel.syncDepartmentConversation(
+        conn,
+        departmentId,
+        activeYear.academic_year_id,
+        user_id
       );
 
       await conn.commit();
@@ -125,104 +142,172 @@ class StudentModel {
   }
 
   static async update(student_id, data) {
-    const [[existing]] = await db.query(
-      `SELECT u.f_name, u.l_name, u.email, s.course_id, s.ojt_hours_required
-       FROM students s
-       JOIN users u ON s.user_id = u.user_id
-       WHERE s.student_id = ?`,
-      [student_id]
-    );
+    const conn = await db.getConnection();
 
-    if (!existing) {
-      const err = new Error("Student not found");
-      err.statusCode = 404;
+    let row;
+
+    try {
+      await conn.beginTransaction();
+
+      const [[existing]] = await conn.query(
+        `SELECT u.f_name, u.l_name, u.email, s.course_id, s.ojt_hours_required,
+                s.department_id, s.academic_year_id
+         FROM students s
+         JOIN users u ON s.user_id = u.user_id
+         WHERE s.student_id = ?`,
+        [student_id]
+      );
+
+      if (!existing) {
+        const err = new Error("Student not found");
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const {
+        f_name,
+        l_name,
+        email,
+        course_id,
+        course,
+        ojt_hours_required,
+        totalHours
+      } = data;
+
+      const finalCourseId = course_id || course || existing.course_id;
+      const finalHours = ojt_hours_required || totalHours || existing.ojt_hours_required;
+      const finalFName = f_name ?? existing.f_name;
+      const finalLName = l_name ?? existing.l_name;
+      const finalEmail = email ?? existing.email;
+
+      // Captured before the update so we can detect a department transfer
+      // and synchronize both the old and new department groups below.
+      const oldDepartmentId = existing.department_id;
+      const academicYearId = existing.academic_year_id;
+
+      await conn.query(
+        `UPDATE users u
+         JOIN students s ON s.user_id = u.user_id
+         SET u.f_name = ?, u.l_name = ?, u.email = ?
+         WHERE s.student_id = ?`,
+        [finalFName, finalLName, finalEmail, student_id]
+      );
+
+      await conn.query(
+        `UPDATE students
+         SET 
+           course_id = ?,
+           department_id = (
+             SELECT department_id
+             FROM courses
+             WHERE course_id = ?
+           ),
+           ojt_hours_required = ?
+         WHERE student_id = ?`,
+        [finalCourseId, finalCourseId, finalHours, student_id]
+      );
+
+      const [[updatedStudent]] = await conn.query(
+        `SELECT department_id FROM students WHERE student_id = ?`,
+        [student_id]
+      );
+
+      const newDepartmentId = updatedStudent.department_id;
+
+      // Only re-sync when the student actually moved departments. A
+      // transfer means the old group must lose them and the new group
+      // must gain them.
+      if (oldDepartmentId !== newDepartmentId) {
+        await MessageModel.syncDepartmentConversation(conn, oldDepartmentId, academicYearId);
+        await MessageModel.syncDepartmentConversation(conn, newDepartmentId, academicYearId);
+      }
+
+      [[row]] = await conn.query(`
+        SELECT 
+          s.student_id,
+          u.f_name,
+          u.l_name,
+          u.email,
+          c.course_id,
+          c.course_code,
+          c.course_name,
+          s.ojt_hours_required,
+          s.is_active
+        FROM students s
+        JOIN users u ON s.user_id = u.user_id
+        LEFT JOIN courses c ON s.course_id = c.course_id
+        WHERE s.student_id = ?
+      `, [student_id]);
+
+      await conn.commit();
+
+    } catch (err) {
+      await conn.rollback();
       throw err;
+    } finally {
+      conn.release();
     }
-
-    const {
-      f_name,
-      l_name,
-      email,
-      course_id,
-      course,
-      ojt_hours_required,
-      totalHours
-    } = data;
-
-    const finalCourseId = course_id || course || existing.course_id;
-    const finalHours = ojt_hours_required || totalHours || existing.ojt_hours_required;
-    const finalFName = f_name ?? existing.f_name;
-    const finalLName = l_name ?? existing.l_name;
-    const finalEmail = email ?? existing.email;
-
-    await db.query(
-      `UPDATE users u
-       JOIN students s ON s.user_id = u.user_id
-       SET u.f_name = ?, u.l_name = ?, u.email = ?
-       WHERE s.student_id = ?`,
-      [finalFName, finalLName, finalEmail, student_id]
-    );
-
-    await db.query(
-      `UPDATE students
-       SET 
-         course_id = ?,
-         department_id = (
-           SELECT department_id
-           FROM courses
-           WHERE course_id = ?
-         ),
-         ojt_hours_required = ?
-       WHERE student_id = ?`,
-      [finalCourseId, finalCourseId, finalHours, student_id]
-    );
-
-    const [[row]] = await db.query(`
-      SELECT 
-        s.student_id,
-        u.f_name,
-        u.l_name,
-        u.email,
-        c.course_id,
-        c.course_code,
-        c.course_name,
-        s.ojt_hours_required,
-        s.is_active
-      FROM students s
-      JOIN users u ON s.user_id = u.user_id
-      LEFT JOIN courses c ON s.course_id = c.course_id
-      WHERE s.student_id = ?
-    `, [student_id]);
 
     return row;
   }
 
   static async setStatus(student_id, is_active) {
-    await db.query(
-      `UPDATE students
-       SET 
-         is_active = ?,
-         inactive_since = IF(? = 0, NOW(), NULL)
-       WHERE student_id = ?`,
-      [is_active, is_active, student_id]
-    );
+    const conn = await db.getConnection();
 
-    const [[row]] = await db.query(`
-      SELECT 
-        s.student_id,
-        s.course_id,
-        u.f_name,
-        u.l_name,
-        u.email,
-        c.course_code,
-        c.course_name,
-        s.ojt_hours_required,
-        s.is_active
-      FROM students s
-      JOIN users u ON s.user_id = u.user_id
-      LEFT JOIN courses c ON s.course_id = c.course_id
-      WHERE s.student_id = ?
-    `, [student_id]);
+    let row;
+
+    try {
+      await conn.beginTransaction();
+
+      await conn.query(
+        `UPDATE students
+         SET 
+           is_active = ?,
+           inactive_since = IF(? = 0, NOW(), NULL)
+         WHERE student_id = ?`,
+        [is_active, is_active, student_id]
+      );
+
+      const [[student]] = await conn.query(
+        `SELECT department_id, academic_year_id FROM students WHERE student_id = ?`,
+        [student_id]
+      );
+
+      // Re-syncing removes the student from the group when deactivated
+      // and restores them when reactivated.
+      if (student) {
+        await MessageModel.syncDepartmentConversation(
+          conn,
+          student.department_id,
+          student.academic_year_id
+        );
+      }
+
+      [[row]] = await conn.query(`
+        SELECT 
+          s.student_id,
+          s.course_id,
+          u.f_name,
+          u.l_name,
+          u.email,
+          c.course_code,
+          c.course_name,
+          s.ojt_hours_required,
+          s.is_active
+        FROM students s
+        JOIN users u ON s.user_id = u.user_id
+        LEFT JOIN courses c ON s.course_id = c.course_id
+        WHERE s.student_id = ?
+      `, [student_id]);
+
+      await conn.commit();
+
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
 
     return row;
   }

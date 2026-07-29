@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const MessageModel = require("./messageModel");
 
 class AdminModel {
 
@@ -273,6 +274,17 @@ static async getRecentActivity(
         DELETE FROM students_archive
         WHERE student_id = ?
       `, [student_id]);
+
+      // Restore the student's membership in their department consultation
+      // group, using the archived row's values already in hand — no
+      // extra SELECT needed. Runs inside the same transaction, so a
+      // sync failure rolls back the restore too.
+      await MessageModel.syncDepartmentConversation(
+        conn,
+        student.department_id,
+        student.academic_year_id,
+        student.user_id
+      );
 
       await conn.commit();
 
