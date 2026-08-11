@@ -2,7 +2,10 @@ const db = require("../config/db");
 const bcrypt = require("bcrypt");
 const { generatePassword } = require("../utils/password");
 const { sendStudentCredentials } = require("../utils/mailer");
-const { sendNotification } = require("../services/notificationServices");
+const {
+  sendNotification,
+  NotificationTypes,
+} = require("../services/notificationService");
 const AcademicYearModel = require("./AcademicYearModel");
 const MessageModel = require("./messageModel");
 
@@ -121,9 +124,11 @@ class StudentModel {
 
     sendNotification({
       user_id,
+      sender_id: null,
+      reference_id: studentRes.insertId,
       title: "OJT Account Created",
       message: `Welcome ${f_name}! Your OJT account is ready.`,
-      type: "system",
+      type: NotificationTypes.SYSTEM,
       link: "/student/dashboard",
       academic_year_id: activeYear.academic_year_id
     }).catch((err) => {

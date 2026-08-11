@@ -1,4 +1,8 @@
 const db = require("../config/db");
+const {
+  sendNotification,
+  NotificationTypes,
+} = require("../services/notificationService");
 
 // Helpers
 class ValidationError extends Error {
@@ -36,11 +40,6 @@ class ConflictError extends Error {
 const isPositiveInt = (value) => Number.isInteger(value) && value > 0;
 const isNullableOrPositiveInt = (value) => value === null || value === undefined || isPositiveInt(value);
 
-// Shared by fetchMentionsForMessages / fetchReactionsForMessages /
-// fetchAttachmentsForMessages / fetchReplySnapshots: normalizes an
-// arbitrary messageIds input down to a deduped array of positive integers,
-// or [] if there's nothing valid to query. Centralizing this avoids each
-// fetch helper re-deriving the same filtered/deduped list independently.
 const toValidUniqueIds = (ids) => {
   if (!Array.isArray(ids) || ids.length === 0) {
     return [];
@@ -63,8 +62,7 @@ const MENTION_TOKEN_REGEX = new RegExp(
 // Attachment limits
 const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 const MAX_ATTACHMENT_NAME_LENGTH = 255;
-const MAX_ATTACHMENT_URL_LENGTH = 2048; // keep in sync with the message_attachments.attachment_url column width
-
+const MAX_ATTACHMENT_URL_LENGTH = 2048; 
 const normalizeMentionText = (text) =>
   text.trim().replace(/\s+/g, " ").toLowerCase();
 
@@ -202,16 +200,6 @@ const isPlainObject = (value) =>
 const isNonEmptyStringWithinLength = (value, maxLength) =>
   typeof value === "string" && value.trim() !== "" && value.length <= maxLength;
 
-// Validates the shape and field-level rules for a single attachment.
-// Throws ValidationError on any violation so malformed data never reaches SQL.
-//
-// Extensibility note: attachment_type is intentionally a free-form string,
-// so richer attachment kinds (image/video/audio) don't require a schema
-// change here. If those kinds later need their own fields (thumbnail_url,
-// duration_seconds, scan_status, etc.), add the checks here and mirror the
-// new fields in normalizeAttachment(), saveMessageAttachments()'s INSERT,
-// and fetchAttachmentsForMessages()'s SELECT. The prepare/dedupe/limit
-// pipeline in prepareAttachments() does not need to change.
 const validateAttachment = (attachment) => {
   if (!isPlainObject(attachment)) {
     throw new ValidationError("Each attachment must be an object");
@@ -240,11 +228,6 @@ const validateAttachment = (attachment) => {
   }
 };
 
-// Produces a copy of a (already-validated) attachment with its string
-// fields trimmed. This runs after validateAttachment so validation always
-// sees the caller's raw input, but storage and dedupe both operate on the
-// same normalized values (e.g. "file.pdf" and "file.pdf " are the same
-// attachment).
 const normalizeAttachment = (attachment) => ({
   attachment_name: attachment.attachment_name.trim(),
   attachment_url: attachment.attachment_url.trim(),
@@ -255,12 +238,6 @@ const normalizeAttachment = (attachment) => ({
 const buildAttachmentDedupeKey = (attachment) =>
   `${attachment.attachment_name}\u0000${attachment.attachment_url}\u0000${attachment.attachment_size}`;
 
-// Single pass over the raw attachments array: enforces array shape, the
-// per-message count limit, rejects null/undefined entries, validates every
-// object's fields, normalizes string fields, and drops duplicates (same
-// name + url + size), keeping the first occurrence. Used by
-// saveMessageAttachments() as the only gate attachment data passes through
-// before an INSERT is attempted.
 const prepareAttachments = (attachments) => {
   if (!Array.isArray(attachments)) {
     throw new ValidationError("attachments must be an array");
@@ -283,7 +260,7 @@ const prepareAttachments = (attachments) => {
 
     const dedupeKey = buildAttachmentDedupeKey(normalized);
     if (seen.has(dedupeKey)) {
-      continue; // duplicate within this request, keep the first occurrence
+      continue;
     }
     seen.add(dedupeKey);
     prepared.push(normalized);
@@ -292,10 +269,6 @@ const prepareAttachments = (attachments) => {
   return prepared;
 };
 
-// Bulk-inserts every attachment for a single message inside the caller's
-// transaction. No-op when there are no attachments to save. All validation
-// happens here so a failure surfaces inside the existing transaction and
-// triggers the caller's rollback — no partial inserts are possible.
 const saveMessageAttachments = async (conn, messageId, attachments) => {
   const preparedAttachments = prepareAttachments(attachments);
 
@@ -343,9 +316,6 @@ const fetchAttachmentsForMessages = async (messageIds) => {
   const grouped = groupRowsByKey(rows, "message_id");
   const byMessage = new Map();
 
-  // Freeze each attachment row and its containing array so callers can't
-  // mutate retrieved data, and give every message_id its own array instance
-  // (never a shared reference).
   for (const [messageId, attachmentRows] of grouped.entries()) {
     const frozenRows = attachmentRows.map((row) => Object.freeze({ ...row }));
     byMessage.set(messageId, Object.freeze(frozenRows));
@@ -354,13 +324,6 @@ const fetchAttachmentsForMessages = async (messageIds) => {
   return byMessage;
 };
 
-// Replies
-//
-// Fetches a lightweight "snapshot" of each replied-to message: just enough
-// to render a Messenger-style reply preview (who sent it, what it said,
-// its attachments) without the caller having to make a second round trip.
-// Reuses fetchAttachmentsForMessages() so the attachment shape here is
-// identical to a message's own top-level `attachments`.
 const fetchReplySnapshots = async (replyToMessageIds) => {
   const validIds = toValidUniqueIds(replyToMessageIds);
 
@@ -452,10 +415,6 @@ const assertConversationAccess = async (runner, conversationId, userId, academic
   }
 };
 
-// Validates a reply target inside the caller's transaction: the replied
-// message must exist AND belong to the same conversation as the new
-// message. Returns the validated id (or null when nothing was passed) so
-// callers can insert it directly.
 const resolveReplyToMessageId = async (conn, replyToMessageId, conversationId) => {
   if (replyToMessageId === null || replyToMessageId === undefined) {
     return null;
@@ -677,14 +636,6 @@ const buildConsultationTargetQuery = (role) => {
   `;
 };
 
-// Department Groups
-//
-// Reusable helpers for Automatic Department Group Management. Each helper
-// has exactly one job and takes `conn` explicitly (not the module-level
-// `db`) so syncDepartmentConversation() (Phase 2) can compose them inside
-// a single transaction. No synchronization logic lives here yet.
-
-// Returns the department group conversation if one exists, else null.
 const fetchDepartmentConversationRow = async (conn, departmentId, academicYearId) => {
   const [rows] = await conn.execute(`
     SELECT *
@@ -729,8 +680,6 @@ const fetchDepartmentStudentIds = async (conn, departmentId, academicYearId) => 
   return rows.map((row) => row.user_id);
 };
 
-// Returns user_ids of active coordinators in a department.
-// Coordinators are department-scoped, not academic-year scoped.
 const fetchDepartmentCoordinatorIds = async (conn, departmentId) => {
   const [rows] = await conn.execute(`
     SELECT user_id
@@ -753,29 +702,6 @@ const fetchConversationMemberIdSet = async (conn, conversationId) => {
   return new Set(rows.map((row) => row.user_id));
 };
 
-// Inserts a single (conversation_id, user_id) membership row and verifies
-// it actually landed in the table. This replaces a previous bulk
-// `INSERT IGNORE ... VALUES (?, ?, NOW()), (?, ?, NOW()), ...` call.
-//
-// Why the change: INSERT IGNORE swallows *every* error on the row it
-// applies to -- not just the "duplicate (conversation_id, user_id)" case
-// it was meant to guard against. If any other constraint on the table
-// (a stray unique/foreign key, a NOT NULL column added later, a data-type
-// mismatch, etc.) rejected a row, INSERT IGNORE would silently drop it
-// with affectedRows === 0 and no thrown error -- exactly the kind of
-// "algorithm says it should have inserted, but the row never appears"
-// symptom this fix addresses. Doing the insert one row at a time lets us:
-//   1. Catch ONLY the specific duplicate-membership error (ER_DUP_ENTRY)
-//      and treat that as a harmless no-op, matching the old INSERT IGNORE
-//      intent for that one case.
-//   2. Let any other error surface and abort the transaction instead of
-//      being masked.
-//   3. Verify the row is actually SELECT-able afterwards, on the same
-//      connection, so we don't rely solely on affectedRows semantics
-//      (which differ for "inserted" vs "ignored duplicate" across drivers).
-//
-// Temporary debug logging (per the task) is included here; it is scoped
-// to this one helper so it is easy to strip out later.
 const insertConversationMember = async (conn, conversationId, userId) => {
   const params = [conversationId, userId];
   console.log("Insert parameters:", params);
@@ -790,16 +716,11 @@ const insertConversationMember = async (conn, conversationId, userId) => {
     );
   } catch (err) {
     if (err && err.code === "ER_DUP_ENTRY") {
-      // Already a member (e.g. a concurrent sync got there first). This is
-      // the one case the old INSERT IGNORE was meant to cover -- treat it
-      // as a no-op, not a failure.
+
       console.log("SYNC INSERT SKIPPED (duplicate membership)", { conversationId, userId });
       return { inserted: false, reason: "duplicate" };
     }
 
-    // Any other failure (bad FK, unexpected constraint, etc.) must not be
-    // swallowed -- surface it so the caller's transaction rolls back and
-    // the real cause is visible instead of a silently missing row.
     console.log("SYNC INSERT FAILED", {
       conversationId,
       userId,
@@ -827,9 +748,7 @@ const insertConversationMember = async (conn, conversationId, userId) => {
   console.log("Verification query:", verificationRows);
 
   if (verificationRows.length === 0) {
-    // The insert reported success but the row isn't visible on this same
-    // connection -- this should never happen inside a single transaction,
-    // but if it does, fail loudly instead of returning a false "added".
+
     console.log("SYNC INSERT VERIFICATION FAILED - row not found after insert", {
       conversationId,
       userId
@@ -840,6 +759,100 @@ const insertConversationMember = async (conn, conversationId, userId) => {
   }
 
   return { inserted: true, reason: null };
+};
+
+const NOTIFICATION_PREVIEW_LENGTH = 80;
+const ATTACHMENT_ONLY_PREVIEW = "Sent an attachment.";
+
+const buildNotificationPreview = (normalizedMessage, hasAttachment) => {
+  if (!normalizedMessage) {
+    return hasAttachment ? ATTACHMENT_ONLY_PREVIEW : "";
+  }
+
+  if (normalizedMessage.length <= NOTIFICATION_PREVIEW_LENGTH) {
+    return normalizedMessage;
+  }
+
+  return `${normalizedMessage.slice(0, NOTIFICATION_PREVIEW_LENGTH - 1).trim()}…`;
+};
+
+const resolveMentionRecipientIds = (mention, members, senderId) => {
+  if (mention.type === "user") {
+    return isPositiveInt(mention.userId) && mention.userId !== senderId
+      ? [mention.userId]
+      : [];
+  }
+
+  if (mention.type === "student" || mention.type === "coordinator") {
+    return members
+      .filter((member) => member.role === mention.type && member.user_id !== senderId)
+      .map((member) => member.user_id);
+  }
+
+  return [];
+};
+
+const sendMessageNotifications = async ({
+  senderId,
+  senderName,
+  conversationId,
+  messageId,
+  normalizedMessage,
+  hasAttachment,
+  members,
+  mentions,
+  academicYearId
+}) => {
+  try {
+    if (!Array.isArray(members) || members.length === 0) {
+      return;
+    }
+
+    const recipients = members.filter((member) => member.user_id !== senderId);
+    const title = senderName ? `New message from ${senderName}` : "New message";
+    const preview = buildNotificationPreview(normalizedMessage, hasAttachment);
+    const link = `/messenger/conversations/${conversationId}`;
+
+    await Promise.all(recipients.map((member) => sendNotification({
+      user_id: member.user_id,
+      sender_id: senderId,
+      reference_id: messageId,
+      title,
+      message: preview,
+      type: NotificationTypes.CONSULTATION,
+      link,
+      academic_year_id: academicYearId
+    })));
+
+    if (Array.isArray(mentions) && mentions.length > 0) {
+      const mentionRecipientIds = new Set();
+
+      for (const mention of mentions) {
+        for (const userId of resolveMentionRecipientIds(mention, members, senderId)) {
+          mentionRecipientIds.add(userId);
+        }
+      }
+
+      await Promise.all([...mentionRecipientIds].map((userId) => sendNotification({
+        user_id: userId,
+        sender_id: senderId,
+        reference_id: messageId,
+        title: "You were mentioned",
+        message: preview,
+        type: NotificationTypes.CONSULTATION,
+        link,
+        academic_year_id: academicYearId
+      })));
+    }
+
+  } catch (err) {
+    console.log("SEND MESSAGE NOTIFICATION FAILED", {
+      conversationId,
+      messageId,
+      code: err && err.code,
+      message: err && err.message
+    });
+  }
 };
 
 const MessageModel = {
@@ -975,6 +988,9 @@ const MessageModel = {
 
     const conn = await db.getConnection();
 
+    let members = [];
+    let mentions = [];
+
     try {
       await conn.beginTransaction();
 
@@ -1012,9 +1028,6 @@ const MessageModel = {
 
       const messageId = result.insertId;
 
-      // Full validation (shape, field rules, count limit, duplicates)
-      // happens inside saveMessageAttachments(); any failure here rolls
-      // back the message row inserted above along with everything else.
       await saveMessageAttachments(conn, messageId, attachments);
 
       if (senderId) {
@@ -1025,19 +1038,15 @@ const MessageModel = {
         );
       }
 
+      members = await fetchConversationMembers(conn, conversationId, academicYearId);
+
       if (hasText) {
-        const members = await fetchConversationMembers(conn, conversationId, academicYearId);
-        const mentions = extractMentionsFromMessage(normalizedMessage, members);
+        mentions = extractMentionsFromMessage(normalizedMessage, members);
         await insertMentionRecords(conn, messageId, mentions);
       }
 
       await conn.commit();
-
-      // Return the fully enriched message (including reply_to) so callers
-      // — the controller's HTTP response and the Socket.IO broadcast alike
-      // — can use it directly without a follow-up fetch. `result` (with its
-      // `insertId`) is preserved on the returned object for compatibility
-      // with any existing caller that only looked at the raw insert result.
+    
       const [freshRows] = await db.execute(`
         ${MESSAGE_SELECT_BASE}
         WHERE m.message_id = ?
@@ -1045,6 +1054,22 @@ const MessageModel = {
       `, [senderId, messageId]);
 
       const [enrichedMessage] = await enrichMessageRows(freshRows);
+
+      const senderName = enrichedMessage?.f_name
+        ? `${enrichedMessage.f_name} ${enrichedMessage.l_name ?? ""}`.trim()
+        : null;
+
+      await sendMessageNotifications({
+        senderId,
+        senderName,
+        conversationId,
+        messageId,
+        normalizedMessage,
+        hasAttachment,
+        members,
+        mentions,
+        academicYearId
+      });
 
       return { ...result, message: enrichedMessage };
 
@@ -1372,14 +1397,6 @@ const MessageModel = {
     }));
   },
 
-
-  // Department Groups
-  //
-  // Reusable helpers only — no synchronization logic yet. Phase 2's
-  // syncDepartmentConversation() will compose these inside a single
-  // transaction to create/find the department group and reconcile
-  // its membership.
-
   // Returns the department group conversation, or null if none exists.
   async getDepartmentConversation(conn, departmentId, academicYearId) {
 
@@ -1412,13 +1429,11 @@ const MessageModel = {
         [conversationName, departmentId, academicYearId, createdBy]
       );
 
-      // Fetch the row back so the return shape always matches the table,
-      // not a manually constructed object.
+
       return fetchDepartmentConversationRow(conn, departmentId, academicYearId);
 
     } catch (err) {
-      // (department_id, academic_year_id, conversation_type) is UNIQUE.
-      // A concurrent caller may have created it first — return that row.
+
       if (err && err.code === "ER_DUP_ENTRY") {
         const existing = await fetchDepartmentConversationRow(conn, departmentId, academicYearId);
 
@@ -1461,9 +1476,6 @@ const MessageModel = {
     return fetchConversationMemberIdSet(conn, conversationId);
   },
 
-  // Reconciles the department group's membership so conversation_members
-  // exactly matches active students + active coordinators. Runs on the
-  // caller's connection/transaction — does not begin, commit, or roll back.
   async syncDepartmentConversation(conn, departmentId, academicYearId, createdBy = null) {
 
     if (!isPositiveInt(departmentId) || !isPositiveInt(academicYearId)) {
@@ -1497,15 +1509,7 @@ const MessageModel = {
 
     console.log("Members to add:", membersToAdd);
 
-    // Previously this was a single bulk `INSERT IGNORE ... VALUES (?, ?, NOW()), ...`
-    // call. INSERT IGNORE suppresses ALL errors on the rows it touches, not
-    // just "this membership already exists" -- so a rejected row (for any
-    // reason) would silently vanish with no thrown error and no visible
-    // symptom beyond "the member never shows up." Inserting one row at a
-    // time through insertConversationMember() keeps duplicate-membership
-    // handling (now scoped to ER_DUP_ENTRY specifically) while letting any
-    // other failure surface and roll back the transaction instead of being
-    // masked. It also verifies each row is actually SELECT-able afterwards.
+
     let addedCount = 0;
 
     for (const userId of membersToAdd) {
@@ -1516,9 +1520,6 @@ const MessageModel = {
       }
     }
 
-    // Skip the DELETE entirely when there's nothing to remove — guards
-    // against an accidental unbounded DELETE ... IN () if this is ever
-    // refactored.
     if (membersToRemove.length > 0) {
       await conn.query(
         `DELETE FROM conversation_members

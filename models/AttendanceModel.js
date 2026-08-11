@@ -1,5 +1,8 @@
 const db = require("../config/db");
-const { sendNotification } = require("../services/notificationServices");
+const {
+  sendNotification,
+  NotificationTypes,
+} = require("../services/notificationService");
 
 function getPHTime() {
   return new Date().toLocaleTimeString("en-CA", {
@@ -119,6 +122,29 @@ const HOURS_SUM_EXPR = `
 `;
 
 class AttendanceModel {
+
+  // Standardized notification payload — every attendance notification goes through this.
+  static async notify({
+    user_id,
+    sender_id = null,
+    reference_id = null,
+    title,
+    message,
+    type = NotificationTypes.ATTENDANCE,
+    link,
+    academic_year_id
+  }) {
+    await sendNotification({
+      user_id,
+      sender_id,
+      reference_id,
+      title,
+      message,
+      type,
+      link,
+      academic_year_id
+    });
+  }
 
   // ACTIVE ATTENDANCE
   static async getActiveAttendance(student_id, academic_year_id) {
@@ -423,10 +449,12 @@ class AttendanceModel {
 
       if (early_attendance) {
         try {
+          // student_user_id pulled from the same join, no extra query needed
           const [[studentInfo]] = await db.query(`
             SELECT
               u.f_name,
               u.l_name,
+              u.user_id AS student_user_id,
               s.start_time,
               cu.user_id AS coordinator_user_id
             FROM students s
@@ -454,11 +482,12 @@ class AttendanceModel {
             const timeInFormatted = formatTime(now);
             const scheduledFormatted = formatTime(studentInfo.start_time);
 
-            await sendNotification({
+            await this.notify({
               user_id: studentInfo.coordinator_user_id,
+              sender_id: studentInfo.student_user_id ?? null,
+              reference_id: result.insertId,
               title: "Early Attendance Request",
               message: `${fullName} submitted an early attendance request.\nTime In: ${timeInFormatted}\nScheduled Start: ${scheduledFormatted}`,
-              type: "system",
               link: "/coordinator/attendance",
               academic_year_id
             });
@@ -626,7 +655,9 @@ class AttendanceModel {
         IFNULL(
           SUM(${HOURS_SUM_EXPR}),
           0
-        ) AS completed_hours
+        ) AS completed_hours,
+
+        MAX(a.attendance_id) AS latest_attendance_id
 
       FROM students s
 
@@ -659,11 +690,12 @@ class AttendanceModel {
 
     if (existing) return;
 
-    await sendNotification({
+    await this.notify({
       user_id: row.user_id,
+      sender_id: null,
+      reference_id: row.latest_attendance_id,
       title: "OJT Completed",
       message: "Congratulations! You have completed your required OJT hours.",
-      type: "system",
       link: "/student/progress",
       academic_year_id
     });
@@ -982,6 +1014,36 @@ class AttendanceModel {
     return rows;
   }
 
+  // Notify the student once a coordinator approves/rejects their early attendance request.
+  // student_user_id / coordinator_user_id are passed in — no query performed here.
+  static async notifyEarlyAttendanceDecision(
+    attendance_id,
+    academic_year_id,
+    student_user_id,
+    coordinator_user_id,
+    decision
+  ) {
+    if (!student_user_id) return;
+
+    try {
+      const approved = decision === "approved";
+
+      await this.notify({
+        user_id: student_user_id,
+        sender_id: coordinator_user_id ?? null,
+        reference_id: attendance_id,
+        title: approved ? "Early Attendance Approved" : "Early Attendance Rejected",
+        message: approved
+          ? "Your early attendance request has been approved."
+          : "Your early attendance request has been rejected.",
+        link: "/student/attendance",
+        academic_year_id
+      });
+    } catch (error) {
+      console.error("Early attendance decision notification failed:", error);
+    }
+  }
+
   // EARLY ATTENDANCE: APPROVE
   static async approveEarlyAttendance(
     attendance_id,
@@ -1002,6 +1064,32 @@ class AttendanceModel {
     if (result.affectedRows === 0) {
       throw new Error("Early attendance request is already processed or not found");
     }
+
+    // Single lookup covers both the student (notification target) and the coordinator (sender_id)
+    const [[info]] = await db.query(`
+      SELECT
+        u.user_id AS student_user_id,
+        cu.user_id AS coordinator_user_id
+      FROM attendance a
+      JOIN students s
+        ON a.student_id = s.student_id
+      JOIN users u
+        ON s.user_id = u.user_id
+      LEFT JOIN coordinators c
+        ON s.department_id = c.department_id
+      LEFT JOIN users cu
+        ON c.user_id = cu.user_id
+      WHERE a.attendance_id = ?
+      LIMIT 1
+    `, [attendance_id]);
+
+    await this.notifyEarlyAttendanceDecision(
+      attendance_id,
+      academic_year_id,
+      info?.student_user_id,
+      info?.coordinator_user_id,
+      "approved"
+    );
 
     return { success: true };
   }
@@ -1026,6 +1114,32 @@ class AttendanceModel {
     if (result.affectedRows === 0) {
       throw new Error("Early attendance request is already processed or not found");
     }
+
+    // Single lookup covers both the student (notification target) and the coordinator (sender_id)
+    const [[info]] = await db.query(`
+      SELECT
+        u.user_id AS student_user_id,
+        cu.user_id AS coordinator_user_id
+      FROM attendance a
+      JOIN students s
+        ON a.student_id = s.student_id
+      JOIN users u
+        ON s.user_id = u.user_id
+      LEFT JOIN coordinators c
+        ON s.department_id = c.department_id
+      LEFT JOIN users cu
+        ON c.user_id = cu.user_id
+      WHERE a.attendance_id = ?
+      LIMIT 1
+    `, [attendance_id]);
+
+    await this.notifyEarlyAttendanceDecision(
+      attendance_id,
+      academic_year_id,
+      info?.student_user_id,
+      info?.coordinator_user_id,
+      "rejected"
+    );
 
     return { success: true };
   }

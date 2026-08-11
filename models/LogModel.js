@@ -1,11 +1,9 @@
 const db = require("../config/db");
-const { sendNotification } = require("../services/notificationServices");
+const { sendNotification, NotificationTypes } = require("../services/notificationService");
 
 class LogModel {
 
-  // =========================
-  // STUDENT LOGS
-  // =========================
+  // Student logs
   static async getByStudent(
     student_id,
     academic_year_id
@@ -83,9 +81,7 @@ class LogModel {
     return rows;
   }
 
-  // =========================
-  // CREATE LOG
-  // =========================
+  // Create log
   static async create(data) {
 
     const { student_id, log_date, narrative } = data;
@@ -126,8 +122,12 @@ class LogModel {
       narrative
     ]);
 
+    const logId = result.insertId;
+
     const [[coord]] = await db.query(`
-      SELECT co.user_id
+      SELECT
+        co.user_id AS coordinator_user_id,
+        s.user_id AS student_user_id
       FROM students s
       JOIN courses c
         ON s.course_id = c.course_id
@@ -137,23 +137,23 @@ class LogModel {
       LIMIT 1
     `, [student_id]);
 
-    if (coord?.user_id) {
+    if (coord?.coordinator_user_id) {
       await sendNotification({
-        user_id: coord.user_id,
+        user_id: coord.coordinator_user_id,
+        sender_id: coord.student_user_id ?? null,
+        reference_id: logId,
         title: "New Daily Log Submitted",
         message: "A student submitted a new daily OJT log.",
-        type: "log",
+        type: NotificationTypes.DAILY_LOG,
         link: "/coordinator/daily-logs",
         academic_year_id: student.academic_year_id
       });
     }
 
-    return result.insertId;
+    return logId;
   }
 
-  // =========================
-  // SINGLE LOG
-  // =========================
+  // Single log
   static async getById(log_id, academic_year_id) {
 
     const [[log]] = await db.query(`
@@ -279,9 +279,7 @@ class LogModel {
     return log;
   }
 
-  // =========================
-  // GET ATTACHMENT BY ID
-  // =========================
+  // Get attachment by id
   static async getAttachmentById(attachmentId, academic_year_id) {
 
     const [[file]] = await db.query(`
@@ -301,9 +299,7 @@ class LogModel {
     return file || null;
   }
 
-  // =========================
-  // COORDINATOR / ADMIN LOGS
-  // =========================
+  // Coordinator / admin logs
   static async getByDepartment(department_id, academic_year_id) {
 
     const query = `
@@ -408,9 +404,8 @@ class LogModel {
 
     return rows;
   }
-  // =========================
-  // ADD ATTACHMENT
-  // =========================
+
+  // Add attachment
   static async addAttachment(data) {
 
     const {
@@ -438,9 +433,7 @@ class LogModel {
 
   }
 
-  // =========================
-  // UPDATE LOG (student revision)
-  // =========================
+  // Update log (student revision)
   static async updateByStudent(
     log_id,
     student_id,
@@ -466,7 +459,9 @@ class LogModel {
     ]);
 
     const [[coord]] = await db.query(`
-      SELECT co.user_id
+      SELECT
+        co.user_id AS coordinator_user_id,
+        s.user_id AS student_user_id
       FROM students s
       JOIN courses c
         ON s.course_id = c.course_id
@@ -476,13 +471,15 @@ class LogModel {
       LIMIT 1
     `, [student_id]);
 
-    if (coord?.user_id) {
+    if (coord?.coordinator_user_id) {
 
       await sendNotification({
-        user_id: coord.user_id,
+        user_id: coord.coordinator_user_id,
+        sender_id: coord.student_user_id ?? null,
+        reference_id: log_id,
         title: "Revised Daily Log Submitted",
         message: "A student resubmitted a revised daily log.",
-        type: "log",
+        type: NotificationTypes.DAILY_LOG,
         link: "/coordinator/daily-logs",
         academic_year_id
       });
@@ -492,9 +489,7 @@ class LogModel {
     return result.affectedRows;
   }
 
-  // =========================
-  // UPDATE STATUS (coordinator)
-  // =========================
+  // Update status (coordinator)
   static async updateStatus(
     log_id,
     status,
@@ -563,9 +558,11 @@ class LogModel {
 
     await sendNotification({
       user_id: row.user_id,
+      sender_id: coordinator_user_id ?? null,
+      reference_id: log_id,
       title,
       message,
-      type: "feedback",
+      type: NotificationTypes.FEEDBACK,
       link,
       academic_year_id
     });

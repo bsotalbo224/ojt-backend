@@ -1,29 +1,80 @@
 require("dotenv").config();
 
-const express = require("express");
+// Node.js modules
 const http = require("http");
+
+// Third-party packages
+const cookieParser = require("cookie-parser");
 const cors = require("cors");
+const cron = require("node-cron");
+const express = require("express");
 const helmet = require("helmet");
 const morgan = require("morgan");
-const cookieParser = require("cookie-parser");
-
 const { Server } = require("socket.io");
 
+// Configuration
 const db = require("./config/db");
 
-const cron = require("node-cron");
+// Services
 const { archiveInactiveStudents } = require("./services/archiveServices");
+const { setSocket } = require("./services/notificationServices");
 
+// Middleware
 const { requireAuth } = require("./middleware/authMiddleware");
 const coordinatorScope = require("./middleware/coordinatorScope");
 
+// Routes
+const academicYearsRoutes = require("./routes/academicYears");
+const adminReportsRoutes = require("./routes/adminReports");
+const adminRoutes = require("./routes/admin");
+const attendanceRoutes = require("./routes/attendance");
+const authRoutes = require("./routes/auth");
+const companyRoutes = require("./routes/companies");
+const coordinatorRoutes = require("./routes/coordinators");
+const coursesRoutes = require("./routes/courses");
+const departmentsRoutes = require("./routes/departments");
+const evaluationResponsesRoutes = require("./routes/evaluationResponses");
+const evaluationTemplatesRoutes = require("./routes/evaluationTemplates");
+const logsRoutes = require("./routes/logs");
+const messageRoutes = require("./routes/messageRoutes");
+const narrativeRoutes = require("./routes/narrative");
+const notificationRoutes = require("./routes/notifications");
+const progressRoutes = require("./routes/progress");
+const publicEvaluationRoutes = require("./routes/publicEvaluation");
+const reportRoutes = require("./routes/report");
+const requiredHoursRoutes = require("./routes/requiredHoursRoutes");
+const reviewRoutes = require("./routes/reviews");
+const studentRoutes = require("./routes/student");
+const uploadRoutes = require("./routes/upload");
+const usersRoutes = require("./routes/users");
+
+// Constants
+const PORT = process.env.PORT || 5000;
+const HEALTH_CHECK_RESPONSE = "OK";
+
+const USER_ROOM_PREFIX = "user_";
+const CONVERSATION_ROOM_PREFIX = "conversation_";
+
+const userRoom = (id) => `${USER_ROOM_PREFIX}${id}`;
+const conversationRoom = (id) => `${CONVERSATION_ROOM_PREFIX}${id}`;
+
+const SOCKET_EVENTS = Object.freeze({
+  JOIN: "join",
+  JOIN_CONVERSATION: "join_conversation",
+  LEAVE_CONVERSATION: "leave_conversation",
+  TYPING: "typing",
+  STOP_TYPING: "stop_typing",
+  MESSAGE_DELIVERED: "message_delivered",
+  MESSAGE_SEEN: "message_seen",
+  ONLINE_USERS: "online_users",
+});
+
+const allowedOrigins = Object.freeze(["http://localhost:5173", process.env.CLIENT_URL]);
+
+// Server creation
 const app = express();
 app.set("trust proxy", 1);
-const port = process.env.PORT || 5000;
 
-/* =========================
-   CREATE HTTP SERVER + SOCKET
-========================= */
 const server = http.createServer(app);
 
 const io = new Server(server, {
@@ -33,9 +84,9 @@ const io = new Server(server, {
   },
 });
 
-/* =========================
-   PRESENCE TRACKING
-========================= */
+setSocket(io);
+
+// Socket.IO
 const onlineUsers = new Map();
 
 const addOnlineUser = (userId, socketId) => {
@@ -57,135 +108,74 @@ const removeOnlineUser = (userId, socketId) => {
 };
 
 const broadcastOnlineUsers = () => {
-  io.emit("online_users", Array.from(onlineUsers.keys()));
+  io.emit(SOCKET_EVENTS.ONLINE_USERS, Array.from(onlineUsers.keys()));
 };
 
-/* =========================
-   SOCKET CONNECTION
-========================= */
 io.on("connection", (socket) => {
-
   // Presence
-  socket.on("join", (userId) => {
+  socket.on(SOCKET_EVENTS.JOIN, (userId) => {
     if (!userId) return;
 
     socket.userId = userId;
-    socket.join(`user_${userId}`);
+    socket.join(userRoom(userId));
 
     addOnlineUser(userId, socket.id);
     broadcastOnlineUsers();
   });
 
-  // Conversation Rooms
-  socket.on("join_conversation", (conversationId) => {
+  // Conversation rooms
+  socket.on(SOCKET_EVENTS.JOIN_CONVERSATION, (conversationId) => {
     if (!conversationId) return;
-    socket.join(`conversation_${conversationId}`);
+    socket.join(conversationRoom(conversationId));
   });
 
-  socket.on("leave_conversation", (conversationId) => {
+  socket.on(SOCKET_EVENTS.LEAVE_CONVERSATION, (conversationId) => {
     if (!conversationId) return;
-    socket.leave(`conversation_${conversationId}`);
+    socket.leave(conversationRoom(conversationId));
   });
 
-  // Typing
-  socket.on("typing", ({ conversationId } = {}) => {
+  // Typing indicators
+  socket.on(SOCKET_EVENTS.TYPING, ({ conversationId } = {}) => {
     if (!conversationId || !socket.userId) return;
-    socket.to(`conversation_${conversationId}`).emit("typing", {
+    socket.to(conversationRoom(conversationId)).emit(SOCKET_EVENTS.TYPING, {
       conversationId,
       userId: socket.userId,
     });
   });
 
-  socket.on("stop_typing", ({ conversationId } = {}) => {
+  socket.on(SOCKET_EVENTS.STOP_TYPING, ({ conversationId } = {}) => {
     if (!conversationId || !socket.userId) return;
-    socket.to(`conversation_${conversationId}`).emit("stop_typing", {
+    socket.to(conversationRoom(conversationId)).emit(SOCKET_EVENTS.STOP_TYPING, {
       conversationId,
       userId: socket.userId,
     });
   });
 
-  // Delivery & Read Receipts
-  socket.on("message_delivered", ({ messageId, senderId } = {}) => {
+  // Delivery and read receipts
+  socket.on(SOCKET_EVENTS.MESSAGE_DELIVERED, ({ messageId, senderId } = {}) => {
     if (!messageId || !senderId) return;
-    io.to(`user_${senderId}`).emit("message_delivered", { messageId });
+    io.to(userRoom(senderId)).emit(SOCKET_EVENTS.MESSAGE_DELIVERED, { messageId });
   });
 
-  socket.on("message_seen", ({ messageId, senderId } = {}) => {
+  socket.on(SOCKET_EVENTS.MESSAGE_SEEN, ({ messageId, senderId } = {}) => {
     if (!messageId || !senderId) return;
-    io.to(`user_${senderId}`).emit("message_seen", { messageId });
+    io.to(userRoom(senderId)).emit(SOCKET_EVENTS.MESSAGE_SEEN, { messageId });
   });
 
-  // Disconnect
   socket.on("disconnect", () => {
-    if (socket.userId) {
-      removeOnlineUser(socket.userId, socket.id);
-      broadcastOnlineUsers();
-    }
+    if (!socket.userId) return;
+
+    removeOnlineUser(socket.userId, socket.id);
+    broadcastOnlineUsers();
   });
 });
 
-module.exports.io = io;
+module.exports = { io };
 
-//////////////////////////////////////////////////////
-// =========================
-// ROUTE IMPORTS
-// =========================
-//////////////////////////////////////////////////////
-
-// auth
-const authRoutes = require("./routes/auth");
-const usersRoutes = require("./routes/users");
-
-//upload
-const uploadRoutes = require("./routes/upload");
-
-// core modules
-const adminRoutes = require("./routes/admin");
-const coordinatorRoutes = require("./routes/coordinators");
-
-const companyRoutes = require("./routes/companies");
-const studentRoutes = require("./routes/student");
-const requiredHoursRoutes = require("./routes/requiredHoursRoutes");
-
-const logsRoutes = require("./routes/logs");
-const attendanceRoutes = require("./routes/attendance");
-const narrativeRoutes = require("./routes/narrative");
-const reviewRoutes = require("./routes/reviews");
-
-const reportRoutes = require("./routes/report");
-const progressRoutes = require("./routes/progress");
-
-const notificationRoutes = require("./routes/notifications");
-
-const messageRoutes = require("./routes/messageRoutes");
-
-// admin modules
-const departmentsRoutes = require("./routes/departments");
-const coursesRoutes = require("./routes/courses");
-const adminReportsRoutes = require("./routes/adminReports");
-
-// evaluation system
-const evaluationTemplatesRoutes = require("./routes/evaluationTemplates");
-const publicEvaluationRoutes = require("./routes/publicEvaluation");
-const evaluationResponsesRoutes = require("./routes/evaluationResponses");
-
-// academic year module
-const academicYearsRoutes = require("./routes/academicYears");
-
-//////////////////////////////////////////////////////
-// =========================
-// GLOBAL MIDDLEWARE
-// =========================
-//////////////////////////////////////////////////////
-
-const allowedOrigins = [
-  "http://localhost:5173",
-  process.env.CLIENT_URL,
-];
-
+// Middleware
 app.use(
   cors({
-    origin: function (origin, callback) {
+    origin: (origin, callback) => {
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
@@ -206,96 +196,49 @@ app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
 
-// =========================
-// HEALTH CHECK (KEEP RENDER AWAKE)
-// =========================
-app.get('/api/health', (req, res) => {
-  res.send('OK');
+// Health check (keeps Render awake)
+app.get("/api/health", (req, res) => {
+  res.send(HEALTH_CHECK_RESPONSE);
 });
 
-//////////////////////////////////////////////////////
-// =========================
-// PUBLIC ROUTES
-// =========================
-//////////////////////////////////////////////////////
-
+// Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/upload", uploadRoutes);
-
-
-// Public evaluation (supervisor access)
 app.use("/api/public-evaluation", publicEvaluationRoutes);
 
-//////////////////////////////////////////////////////
-// =========================
-// AUTH REQUIRED
-// =========================
-//////////////////////////////////////////////////////
-
+// Auth required beyond this point
 app.use(requireAuth);
 
-// user info
 app.use("/api/users", usersRoutes);
-
-// messages
 app.use("/api/messages", messageRoutes);
 
-//////////////////////////////////////////////////////
-// =========================
-// CORE SYSTEM ROUTES
-// =========================
-//////////////////////////////////////////////////////
-
 app.use("/api/required-hours", requiredHoursRoutes);
-
-// admin
 app.use("/api/admin", adminRoutes);
-
-// coordinators
 app.use("/api/coordinators", coordinatorRoutes);
 
-// department-scoped
+// Department-scoped routes
 app.use("/api/companies", coordinatorScope, companyRoutes);
 app.use("/api/student", coordinatorScope, studentRoutes);
-
 app.use("/api/logs", coordinatorScope, logsRoutes);
 app.use("/api/attendance", coordinatorScope, attendanceRoutes);
 app.use("/api/narratives", coordinatorScope, narrativeRoutes);
 app.use("/api/reviews", coordinatorScope, reviewRoutes);
-
 app.use("/api/report", coordinatorScope, reportRoutes);
 app.use("/api/progress", coordinatorScope, progressRoutes);
 
-// notifications
 app.use("/api/notifications", notificationRoutes);
 
-//////////////////////////////////////////////////////
-// =========================
-// ADMIN MODULES
-// =========================
-//////////////////////////////////////////////////////
-
+// Admin modules
 app.use("/api/academic-years", academicYearsRoutes);
-
 app.use("/api/admin/departments", departmentsRoutes);
 app.use("/api/courses", coursesRoutes);
 app.use("/api/admin-reports", adminReportsRoutes);
 
-//////////////////////////////////////////////////////
-// =========================
-// EVALUATION SYSTEM
-// =========================
-//////////////////////////////////////////////////////
-
+// Evaluation system
 app.use("/api/evaluation-templates", evaluationTemplatesRoutes);
 app.use("/api/evaluations", evaluationResponsesRoutes);
 
-//////////////////////////////////////////////////////
-// =========================
-// 404 HANDLER
-// =========================
-//////////////////////////////////////////////////////
-
+// Error handling
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -303,14 +246,8 @@ app.use((req, res) => {
   });
 });
 
-//////////////////////////////////////////////////////
-// =========================
-// GLOBAL ERROR HANDLER
-// =========================
-//////////////////////////////////////////////////////
-
 app.use((err, req, res, next) => {
-  console.error("Server Error:", err);
+  console.error("Server Error:", err.stack || err);
 
   res.status(500).json({
     success: false,
@@ -318,29 +255,19 @@ app.use((err, req, res, next) => {
   });
 });
 
-//////////////////////////////////////////////////////
-// =========================
-// CRON JOBS
-// =========================
-//////////////////////////////////////////////////////
-
+// Cron jobs
 cron.schedule("0 3 * * *", async () => {
   console.log("Running archive inactive students job...");
   await archiveInactiveStudents();
 });
 
-//////////////////////////////////////////////////////
-// =========================
-// START SERVER
-// =========================
-//////////////////////////////////////////////////////
-
+// Startup
 db.getConnection()
   .then(() => {
     console.log("Database Connected Successfully");
 
-    server.listen(port, () => {
-      console.log(`Server running on port ${port}`);
+    server.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
     });
   })
   .catch((err) => {

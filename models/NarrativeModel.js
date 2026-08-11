@@ -1,11 +1,9 @@
 const db = require("../config/db");
-const { sendNotification } = require("../services/notificationServices");
+const { sendNotification, NotificationTypes } = require("../services/notificationService");
 
 class NarrativeModel {
 
-  // =========================
-  // STUDENT NARRATIVES
-  // =========================
+  // Student narratives
   static async getByStudent(
     student_id,
     academic_year_id
@@ -34,9 +32,7 @@ class NarrativeModel {
   }
 
 
-  // =========================
-  // GET SINGLE NARRATIVE
-  // =========================
+  // Get single narrative
   static async getById(narrative_id, academic_year_id) {
 
     const [[row]] = await db.query(`
@@ -60,9 +56,7 @@ class NarrativeModel {
   }
 
 
-  // =========================
-  // COORDINATOR VIEW
-  // =========================
+  // Coordinator view
   static async getByDepartment(department_id, academic_year_id) {
 
     const [rows] = await db.query(`
@@ -84,10 +78,7 @@ class NarrativeModel {
     ORDER BY n.narrative_date DESC
   `, [department_id, academic_year_id]);
 
-    // =========================
-    // ATTACHMENTS
-    // =========================
-
+    // Attachments
     if (rows.length > 0) {
 
       const narrativeIds = rows.map(n => n.narrative_id);
@@ -118,9 +109,7 @@ class NarrativeModel {
   }
 
 
-  // =========================
-  // CREATE OR UPDATE NARRATIVE
-  // =========================
+  // Create or update narrative
   static async create(data) {
 
     let {
@@ -138,9 +127,7 @@ class NarrativeModel {
 
     let narrativeId;
 
-    // =====================================
-    // UPDATE EXISTING (REVISION / EDIT)
-    // =====================================
+    // Update existing (revision / edit)
     if (narrative_id) {
 
       const [[existing]] = await db.query(`
@@ -186,9 +173,7 @@ class NarrativeModel {
       narrativeId = narrative_id;
 
     }
-    // =====================================
-    // CREATE NEW NARRATIVE
-    // =====================================
+    // Create new narrative
     else {
 
       const [result] = await db.query(`
@@ -215,13 +200,13 @@ class NarrativeModel {
     }
 
 
-    // =====================================
-    // NOTIFY COORDINATOR IF SUBMITTED
-    // =====================================
+    // Notify coordinator if submitted
     if (status === "submitted") {
 
       const [[coord]] = await db.query(`
-        SELECT co.user_id
+        SELECT
+          co.user_id AS coordinator_user_id,
+          s.user_id AS student_user_id
         FROM students s
         JOIN courses c ON s.course_id = c.course_id
         JOIN coordinators co ON co.department_id = c.department_id
@@ -229,13 +214,15 @@ class NarrativeModel {
         LIMIT 1
       `, [student_id]);
 
-      if (coord?.user_id) {
+      if (coord?.coordinator_user_id) {
 
         await sendNotification({
-          user_id: coord.user_id,
+          user_id: coord.coordinator_user_id,
+          sender_id: coord.student_user_id ?? null,
+          reference_id: narrativeId,
           title: "Narrative Submitted",
           message: "A student submitted a narrative report.",
-          type: "narrative",
+          type: NotificationTypes.NARRATIVE,
           link: "/coordinator/narratives",
           academic_year_id
         });
@@ -247,9 +234,7 @@ class NarrativeModel {
   }
 
 
-  // =========================
-  // GET NARRATIVE ATTACHMENTS
-  // =========================
+  // Get narrative attachments
   static async getAttachments(narrative_id, academic_year_id) {
 
     const [rows] = await db.query(`
@@ -271,9 +256,7 @@ class NarrativeModel {
   }
 
 
-  // =========================
-  // UPDATE STATUS (Coordinator)
-  // =========================
+  // Update status (coordinator)
   static async updateStatus(id, status, remarks, academic_year_id) {
 
     await db.query(`
@@ -315,11 +298,14 @@ class NarrativeModel {
 
     }
 
+    // Coordinator's user_id is not available here without an extra query, so sender_id stays null
     await sendNotification({
       user_id: row.user_id,
+      sender_id: null,
+      reference_id: id,
       title,
       message,
-      type: "narrative",
+      type: NotificationTypes.NARRATIVE,
       link: `/student/narratives?revision=${id}`,
       academic_year_id
     });

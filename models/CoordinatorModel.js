@@ -2,7 +2,10 @@ const db = require("../config/db");
 const bcrypt = require("bcryptjs");
 const { generatePassword } = require("../utils/password");
 const { sendCoordinatorCredentials } = require("../utils/mailer");
-const { sendNotification } = require("../services/notificationServices");
+const {
+  sendNotification,
+  NotificationTypes,
+} = require("../services/notificationService");
 const MessageModel = require("./messageModel");
 const AcademicYearModel = require("./AcademicYearModel");
 
@@ -223,10 +226,13 @@ class CoordinatorModel {
 
       await sendNotification({
         user_id,
+        sender_id: null,
+        reference_id: coordRes.insertId,
         title: "Coordinator Account Created",
         message: "Your coordinator account has been created.",
-        type: "system",
-        link: "/dashboard-select"
+        type: NotificationTypes.SYSTEM,
+        link: "/dashboard-select",
+        academic_year_id: null
       });
 
       await sendCoordinatorCredentials(
@@ -1039,9 +1045,11 @@ class CoordinatorModel {
     if (row?.user_id) {
       await sendNotification({
         user_id: row.user_id,
+        sender_id: null,
+        reference_id: studentId,
         title: "OJT Placement Assigned",
         message: `You have been assigned to ${row.company_name}.`,
-        type: "placement",
+        type: NotificationTypes.PLACEMENT,
         link: "/student/dashboard",
         academic_year_id: row.academic_year_id
       });
