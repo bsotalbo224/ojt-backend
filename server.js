@@ -17,7 +17,7 @@ const db = require("./config/db");
 
 // Services
 const { archiveInactiveStudents } = require("./services/archiveServices");
-const { setSocket } = require("./services/notificationServices");
+const { setSocket } = require("./services/notificationService");
 
 // Middleware
 const { requireAuth } = require("./middleware/authMiddleware");
