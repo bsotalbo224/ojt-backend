@@ -1,5 +1,5 @@
 const MessageModel = require("../models/messageModel");
-const { sendNotification } = require("../services/notificationServices");
+const { sendNotification } = require("../services/notificationService");
 const { io } = require("../server");
 
 const MAX_MESSAGE_LENGTH = 5000;
