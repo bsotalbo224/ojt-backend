@@ -1,5 +1,4 @@
 const MessageModel = require("../models/messageModel");
-const { sendNotification } = require("../services/notificationService");
 const { io } = require("../server");
 
 const MAX_MESSAGE_LENGTH = 5000;
@@ -7,15 +6,6 @@ const ALLOWED_MESSAGE_TYPES = ["text", "file", "system"];
 const ALLOWED_REACTION_CODES = ["like", "love", "laugh", "wow", "sad", "angry"];
 const ALLOWED_CONSULTATION_ROLES = ["student", "coordinator", "admin"];
 const KNOWN_STATUS_CODES = new Set([400, 401, 403, 404, 409]);
-
-const MENTION_PRIORITY = { everyone: 1, student: 2, coordinator: 2, user: 3 };
-
-const MENTION_MESSAGE_BUILDERS = {
-  user: (name) => `${name} mentioned you in a conversation.`,
-  student: (name) => `${name} mentioned @Student`,
-  coordinator: (name) => `${name} mentioned @Coordinator`,
-  everyone: (name) => `${name} mentioned @everyone`
-};
 
 const REACTION_EVENT_BY_ACTION = {
   added: "reaction_added",
@@ -59,13 +49,6 @@ const respondToModelError = (res, err, context) => {
   }
 
   return fail(res, 500, "Server error");
-};
-
-const buildLink = (role, conversationId) => {
-  if (role === "student") return `/student/messages?conversation=${conversationId}`;
-  if (role === "coordinator") return `/coordinator/messages?conversation=${conversationId}`;
-  if (role === "admin") return `/admin/messages?conversation=${conversationId}`;
-  return `/messages?conversation=${conversationId}`;
 };
 
 // Attachment Transform
@@ -137,104 +120,25 @@ const parseReactionRequest = (req, res) => {
 };
 
 
-// Notifications
-const buildNotificationPayload = ({ userId, type, title, message, role, conversationId, academicYearId }) => ({
-  user_id: userId,
-  type,
-  title,
-  message,
-  link: buildLink(role, conversationId),
-  academic_year_id: academicYearId
-});
-
-const dispatchNotification = async (event, payload) => {
-  io.to(`user_${payload.user_id}`).emit(event, payload);
-  await sendNotification(payload);
-};
-
-const buildMentionRecipients = (mentions, members, senderId) => {
-  const recipients = new Map();
-
-  const addRecipient = (userId, type) => {
-    if (!userId || userId === senderId) return;
-    const existingType = recipients.get(userId);
-    if (!existingType || MENTION_PRIORITY[type] > MENTION_PRIORITY[existingType]) {
-      recipients.set(userId, type);
-    }
-  };
-
-  for (const mention of mentions) {
-    switch (mention.mention_type) {
-      case "user":
-        addRecipient(mention.mentioned_user_id, "user");
-        break;
-      case "everyone":
-        for (const member of members) addRecipient(member.user_id, "everyone");
-        break;
-      case "student":
-        for (const member of members) {
-          if ((member.role || "").toLowerCase() === "student") {
-            addRecipient(member.user_id, "student");
-          }
-        }
-        break;
-      case "coordinator":
-        for (const member of members) {
-          if ((member.role || "").toLowerCase() === "coordinator") {
-            addRecipient(member.user_id, "coordinator");
-          }
-        }
-        break;
-      default:
-        break;
-    }
-  }
-
-  return recipients;
-};
-
-const notifyMentions = async (recipients, memberRoleMap, senderName, conversationId, academicYearId) => {
-  if (recipients.size === 0) return;
-
-  await Promise.all([...recipients.entries()].map(([userId, type]) => {
-    const payload = buildNotificationPayload({
-      userId,
-      type: "mention",
-      title: "Mentioned You",
-      message: MENTION_MESSAGE_BUILDERS[type](senderName),
-      role: memberRoleMap.get(userId),
-      conversationId,
-      academicYearId
-    });
-
-    return dispatchNotification("mention_notification", payload);
-  }));
-};
-
-const notifyNewMessage = async (members, senderId, senderName, academicYearId, conversationId, excludeUserIds) => {
-  const recipients = members.filter(
-    (member) => member.user_id !== senderId && !excludeUserIds.has(member.user_id)
-  );
-
-  if (recipients.length === 0) return;
-
-  await Promise.all(recipients.map((member) => {
-    const payload = buildNotificationPayload({
-      userId: member.user_id,
-      type: "message",
-      title: "New Message",
-      message: `${senderName} sent you a message`,
-      role: member.role,
-      conversationId,
-      academicYearId
-    });
-
-    return dispatchNotification("message_notification", payload);
-  }));
-};
-
-
 // Send Message
+//
+// NOTE: notification creation for a sent message (currently: the
+// "You were mentioned" notification, and only that — a plain message no
+// longer creates a normal-notification-system record) is owned entirely
+// by MessageModel.sendMessage() -> sendMessageNotifications(). This
+// handler previously ALSO independently re-fetched members, recomputed
+// mentions, and called its own notifyMentions()/notifyNewMessage(), which
+// meant every message send created normal `notifications` rows (and
+// `notification:new` events) TWICE — once from the model, once from here
+// — with the plain "New Message"/"New message from X" duplicate being
+// exactly what caused ordinary consultation chat messages to appear in
+// the TopBar notification bell. That duplicate path (notifyMentions,
+// notifyNewMessage, dispatchNotification, buildNotificationPayload,
+// buildMentionRecipients, buildLink, and the message_notification /
+// mention_notification socket emits nothing in the frontend was listening
+// for anyway) has been removed. Real-time chat delivery itself is
+// unaffected: emitToConversation(..., "receive_message", ...) below is
+// unchanged and still fires exactly as before.
 exports.sendMessage = async (req, res) => {
   try {
 
@@ -343,16 +247,6 @@ exports.sendMessage = async (req, res) => {
     const enrichedMessage = insertResult.message;
 
     emitToConversation(conversationId, "receive_message", enrichedMessage);
-
-    const senderName = `${enrichedMessage.f_name} ${enrichedMessage.l_name}`.trim() || "Someone";
-
-    const members = await MessageModel.getConversationMembers(conversationId, academicYearId);
-    const memberRoleMap = new Map(members.map((member) => [member.user_id, member.role]));
-
-    const mentionRecipients = buildMentionRecipients(enrichedMessage.mentions, members, senderId);
-
-    await notifyMentions(mentionRecipients, memberRoleMap, senderName, conversationId, academicYearId);
-    await notifyNewMessage(members, senderId, senderName, academicYearId, conversationId, new Set(mentionRecipients.keys()));
 
     return ok(res, { message: "Message sent successfully", data: enrichedMessage });
 

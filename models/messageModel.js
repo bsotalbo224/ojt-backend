@@ -792,9 +792,21 @@ const resolveMentionRecipientIds = (mention, members, senderId) => {
   return [];
 };
 
+// A plain consultation message (no @mention) must NOT create a row in the
+// normal `notifications` table / `notification:new` event — that flow
+// belongs entirely to the message system (receive_message -> Sidebar's
+// consultation badge / ConversationList unread_count, both already live).
+// This function previously ALSO sent a "New message from X" notification
+// to every recipient here, which is exactly what put ordinary chat
+// messages into the TopBar bell; that block has been removed.
+//
+// Being @mentioned is kept as the one genuine, intentional exception: the
+// app already has dedicated mention-parsing (extractMentionsFromMessage,
+// message_mentions table) distinct from "a message arrived," so it still
+// creates a real "You were mentioned" notification via the normal
+// notification system, same as before.
 const sendMessageNotifications = async ({
   senderId,
-  senderName,
   conversationId,
   messageId,
   normalizedMessage,
@@ -804,46 +816,31 @@ const sendMessageNotifications = async ({
   academicYearId
 }) => {
   try {
-    if (!Array.isArray(members) || members.length === 0) {
+    if (!Array.isArray(mentions) || mentions.length === 0) {
       return;
     }
 
-    const recipients = members.filter((member) => member.user_id !== senderId);
-    const title = senderName ? `New message from ${senderName}` : "New message";
     const preview = buildNotificationPreview(normalizedMessage, hasAttachment);
     const link = `/messenger/conversations/${conversationId}`;
 
-    await Promise.all(recipients.map((member) => sendNotification({
-      user_id: member.user_id,
+    const mentionRecipientIds = new Set();
+
+    for (const mention of mentions) {
+      for (const userId of resolveMentionRecipientIds(mention, members, senderId)) {
+        mentionRecipientIds.add(userId);
+      }
+    }
+
+    await Promise.all([...mentionRecipientIds].map((userId) => sendNotification({
+      user_id: userId,
       sender_id: senderId,
       reference_id: messageId,
-      title,
+      title: "You were mentioned",
       message: preview,
       type: NotificationTypes.CONSULTATION,
       link,
       academic_year_id: academicYearId
     })));
-
-    if (Array.isArray(mentions) && mentions.length > 0) {
-      const mentionRecipientIds = new Set();
-
-      for (const mention of mentions) {
-        for (const userId of resolveMentionRecipientIds(mention, members, senderId)) {
-          mentionRecipientIds.add(userId);
-        }
-      }
-
-      await Promise.all([...mentionRecipientIds].map((userId) => sendNotification({
-        user_id: userId,
-        sender_id: senderId,
-        reference_id: messageId,
-        title: "You were mentioned",
-        message: preview,
-        type: NotificationTypes.CONSULTATION,
-        link,
-        academic_year_id: academicYearId
-      })));
-    }
 
   } catch (err) {
     console.log("SEND MESSAGE NOTIFICATION FAILED", {
@@ -1055,13 +1052,8 @@ const MessageModel = {
 
       const [enrichedMessage] = await enrichMessageRows(freshRows);
 
-      const senderName = enrichedMessage?.f_name
-        ? `${enrichedMessage.f_name} ${enrichedMessage.l_name ?? ""}`.trim()
-        : null;
-
       await sendMessageNotifications({
         senderId,
-        senderName,
         conversationId,
         messageId,
         normalizedMessage,
