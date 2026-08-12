@@ -1063,7 +1063,11 @@ const MessageModel = {
         academicYearId
       });
 
-      return { ...result, message: enrichedMessage };
+      // `members` is exposed here (not just used internally for
+      // notifications) so the controller can emit conversation_updated to
+      // each member's user room using this same already-fetched list,
+      // instead of re-querying conversation membership a second time.
+      return { ...result, message: enrichedMessage, members };
 
     } catch (err) {
       await conn.rollback();
@@ -1652,6 +1656,28 @@ const MessageModel = {
         unread_count: row.unread_count
       };
     });
+  },
+
+  // Returns one member's conversation-list representation for a single
+  // conversation, reusing getConversations() verbatim rather than
+  // duplicating its SQL. This guarantees the real-time conversation_updated
+  // payload (see messageController.js) is byte-for-byte the same shape --
+  // is_group/name/member_count for a group, or the OTHER participant's
+  // user_id/f_name/l_name/photo/role for a private conversation, plus an
+  // authoritative DB-computed unread_count -- that this member would see
+  // on their own next page refresh. Returns null if the member has no
+  // access to (or no row for) that conversation.
+  async getConversationForMember(userId, conversationId, academicYearId) {
+
+    if (!isPositiveInt(userId) || !isPositiveInt(conversationId) || !isPositiveInt(academicYearId)) {
+      throw new ValidationError("userId, conversationId, and academicYearId must be positive integers");
+    }
+
+    const conversations = await MessageModel.getConversations(userId, academicYearId);
+
+    return conversations.find(
+      (c) => String(c.conversation_id) === String(conversationId)
+    ) ?? null;
   },
 
 

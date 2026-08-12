@@ -76,6 +76,51 @@ const emitReactionUpdate = (conversationId, event, messageId, userId, reactionCo
   });
 };
 
+const CONVERSATION_UPDATED_EVENT = "conversation_updated";
+
+// Keeps the sidebar/ConversationList in sync in real time, separately from
+// receive_message (which only reaches clients that have joined this
+// specific conversation's room via join_conversation -- something
+// MessagesPage only does once a conversation is selected). Emitted to each
+// member's own "user_<id>" room instead, which is joined once on mount
+// regardless of what's currently selected, so this reaches recipients even
+// for a conversation they haven't opened, or one that's brand new to them.
+//
+// The conversation-list portion of the payload (is_group/name/member_count,
+// or the other participant's user_id/f_name/l_name/photo/role, plus
+// unread_count) comes from MessageModel.getConversationForMember(), which
+// reuses getConversations()'s own query rather than resolving "the other
+// participant" by hand here -- so a live update is guaranteed to match
+// exactly what that member's own next page refresh would show. Only the
+// message-specific fields (what was just sent) come from enrichedMessage.
+const emitConversationUpdated = async (members, enrichedMessage, conversationId, academicYearId) => {
+  if (!Array.isArray(members) || members.length === 0) return;
+
+  await Promise.all(members.map(async (member) => {
+    const conversationView = await MessageModel.getConversationForMember(
+      member.user_id,
+      conversationId,
+      academicYearId
+    );
+
+    // Shouldn't happen for a member who was just confirmed to belong to
+    // this conversation, but skip rather than emit an incomplete payload.
+    if (!conversationView) return;
+
+    const payload = {
+      ...conversationView,
+      message_id: enrichedMessage.message_id,
+      message: enrichedMessage.message,
+      attachments: enrichedMessage.attachments,
+      sender_id: enrichedMessage.sender_id,
+      sent_at: enrichedMessage.sent_at ?? enrichedMessage.created_at,
+      created_at: enrichedMessage.created_at
+    };
+
+    io.to(`user_${member.user_id}`).emit(CONVERSATION_UPDATED_EVENT, payload);
+  }));
+};
+
 const parseAuthorizedRequest = (req, res, conversationId) => {
   const userId = Number(req.user?.user_id);
   const academicYearId = resolveAcademicYearId(req);
@@ -247,6 +292,7 @@ exports.sendMessage = async (req, res) => {
     const enrichedMessage = insertResult.message;
 
     emitToConversation(conversationId, "receive_message", enrichedMessage);
+    await emitConversationUpdated(insertResult.members, enrichedMessage, conversationId, academicYearId);
 
     return ok(res, { message: "Message sent successfully", data: enrichedMessage });
 
