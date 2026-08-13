@@ -117,6 +117,14 @@ const emitConversationUpdated = async (members, enrichedMessage, conversationId,
       created_at: enrichedMessage.created_at
     };
 
+    // TEMP DIAGNOSTIC — remove once conversation_updated delivery is confirmed fixed.
+    console.log("[conversation_updated EMIT]", {
+      room: `user_${member.user_id}`,
+      conversationId,
+      memberId: member.user_id,
+      payload,
+    });
+
     io.to(`user_${member.user_id}`).emit(CONVERSATION_UPDATED_EVENT, payload);
   }));
 };

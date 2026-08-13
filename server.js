@@ -119,6 +119,12 @@ io.on("connection", (socket) => {
     socket.userId = userId;
     socket.join(userRoom(userId));
 
+    // TEMP DIAGNOSTIC — remove once conversation_updated delivery is confirmed fixed.
+    console.log("[USER ROOM JOIN]", {
+      userId,
+      room: userRoom(userId),
+    });
+
     addOnlineUser(userId, socket.id);
     broadcastOnlineUsers();
   });
