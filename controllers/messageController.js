@@ -1,5 +1,5 @@
 const MessageModel = require("../models/messageModel");
-const { io } = require("../server");
+const { getIO } = require("../services/socketService");
 
 const MAX_MESSAGE_LENGTH = 5000;
 const ALLOWED_MESSAGE_TYPES = ["text", "file", "system"];
@@ -62,9 +62,20 @@ const sanitizeAttachment = (file) => ({
 // Attachment Transform
 const sanitizeAttachments = (files) => (Array.isArray(files) ? files : []).map(sanitizeAttachment);
 
+// NOTE: io is resolved via getIO() INSIDE each emit function, not once at
+// module load. getIO() reads from services/socketService.js's module-level
+// `io` variable at call time. Since these emit functions only ever run
+// while handling an actual HTTP request or socket event -- i.e. after
+// server.js has already called setIO(io) during startup -- getIO() always
+// returns the real, fully-initialized Socket.IO instance. This is what
+// fixes the previous circular-dependency bug (see server.js comments):
+// `const { io } = require("../server")` at the top of this file used to
+// destructure io ONCE, at require time, while server.js was still
+// mid-initialization and hadn't created `io` yet -- permanently capturing
+// undefined.
 const emitToConversation = (conversationId, event, payload) => {
   if (!conversationId || !event) return;
-  io.to(`conversation_${conversationId}`).emit(event, payload);
+  getIO().to(`conversation_${conversationId}`).emit(event, payload);
 };
 
 const emitReactionUpdate = (conversationId, event, messageId, userId, reactionCode, summary) => {
@@ -95,6 +106,8 @@ const CONVERSATION_UPDATED_EVENT = "conversation_updated";
 // message-specific fields (what was just sent) come from enrichedMessage.
 const emitConversationUpdated = async (members, enrichedMessage, conversationId, academicYearId) => {
   if (!Array.isArray(members) || members.length === 0) return;
+
+  const io = getIO();
 
   await Promise.all(members.map(async (member) => {
     const conversationView = await MessageModel.getConversationForMember(

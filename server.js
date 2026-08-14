@@ -18,6 +18,7 @@ const db = require("./config/db");
 // Services
 const { archiveInactiveStudents } = require("./services/archiveServices");
 const { setSocket } = require("./services/notificationService");
+const { setIO } = require("./services/socketService");
 
 // Middleware
 const { requireAuth } = require("./middleware/authMiddleware");
@@ -85,6 +86,20 @@ const io = new Server(server, {
 });
 
 setSocket(io);
+
+// Registers this exact Socket.IO instance with services/socketService.js so
+// any module (messageController.js, etc.) can retrieve it via getIO() at
+// CALL time, instead of destructuring it from server.js's own exports at
+// REQUIRE time -- which is what previously produced `undefined`. That
+// happened because of a circular require: server.js requires route files
+// (which require messageController.js) BEFORE `io` is created here and
+// BEFORE `module.exports = { io }` runs at the bottom of this file, so
+// messageController.js's old `const { io } = require("../server")` captured
+// an empty/incomplete exports object. setIO() below runs synchronously
+// during startup, before server.listen() and therefore before any HTTP
+// request or socket connection can reach a controller, so getIO() is always
+// safe to call from request handlers or socket event handlers.
+setIO(io);
 
 // Socket.IO
 const onlineUsers = new Map();
